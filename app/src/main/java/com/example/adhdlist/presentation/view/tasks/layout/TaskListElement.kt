@@ -41,7 +41,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.adhdlist.data.model.Task
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -50,21 +49,36 @@ import kotlin.math.roundToInt
 private fun TaskListElementPreview() {
     TaskListElement(
         index = 1,
-        task = Task(message = "Wykąpać psa"),
+        message = "Wykąpać psa",
+        state = false,
         onItemSwiped = {},
-        onCheckboxClicked = {})
+        onCheckboxClicked = {}
+    )
+}
+
+@Preview
+@Composable
+private fun TaskListElementDonePreview() {
+    TaskListElement(
+        index = 1,
+        message = "Wykąpać psa",
+        state = true,
+        onItemSwiped = {},
+        onCheckboxClicked = {}
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TaskListElement(
     index: Int,
-    task: Task,
+    message: String,
+    state: Boolean,
     onItemSwiped: () -> Unit,
     onCheckboxClicked: (Boolean) -> Unit,
 ) {
     var normalBoxHeight by remember { mutableIntStateOf(0) }
-    var checkBoxState by remember { mutableStateOf(task.state) }
+    val messageState by remember { mutableStateOf(message) }
     var leftIconVisibility by remember { mutableStateOf(false) }
     var rightIconVisibility by remember { mutableStateOf(false) }
 
@@ -180,7 +194,7 @@ fun TaskListElement(
                                     offset.animateTo(
                                         targetValue = -0f,
                                         animationSpec = tween(
-                                            durationMillis = 500,
+                                            durationMillis = 0,
                                             delayMillis = 0
                                         )
                                     )
@@ -198,7 +212,7 @@ fun TaskListElement(
                                     offset.animateTo(
                                         targetValue = -0f,
                                         animationSpec = tween(
-                                            durationMillis = 500,
+                                            durationMillis = 0,
                                             delayMillis = 0
                                         )
                                     )
@@ -224,7 +238,7 @@ fun TaskListElement(
                         .height(IntrinsicSize.Max),
                     text = "$index.",
                     fontSize = 18.sp,
-                    style = if (checkBoxState) TextStyle.Default.copy(
+                    style = if (state) TextStyle.Default.copy(
                         textDecoration = TextDecoration.LineThrough,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     ) else TextStyle.Default
@@ -236,13 +250,13 @@ fun TaskListElement(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        task.message,
+                        messageState,
                         modifier = Modifier
                             .height(IntrinsicSize.Max)
                             .fillMaxWidth()
                             .padding(2.dp),
                         fontSize = 18.sp,
-                        style = if (checkBoxState) TextStyle.Default.copy(
+                        style = if (state) TextStyle.Default.copy(
                             textDecoration = TextDecoration.LineThrough,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                         ) else TextStyle.Default
@@ -251,10 +265,9 @@ fun TaskListElement(
                 CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
                     Checkbox(
                         modifier = Modifier.padding(2.dp),
-                        checked = checkBoxState,
-                        onCheckedChange = {
-                            checkBoxState = !task.state
-                            onCheckboxClicked(checkBoxState)
+                        checked = state,
+                        onCheckedChange = { isChecked ->
+                            onCheckboxClicked(isChecked)
                         })
                 }
             }

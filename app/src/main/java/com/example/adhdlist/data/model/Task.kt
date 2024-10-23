@@ -15,11 +15,11 @@ import java.io.Serializable
 data class Task(
     @ColumnInfo(name = "list_id")
     var listId: Int = 0,
-    val message: String
+    val message: String,
+    @ColumnInfo(name = "state")
+    var state: Boolean = false
 ) : Serializable {
     @PrimaryKey(autoGenerate = true)
     @ColumnInfo(name = "task_id")
     var id: Int = 0
-    @ColumnInfo(name = "state")
-    var state: Boolean = false
 }

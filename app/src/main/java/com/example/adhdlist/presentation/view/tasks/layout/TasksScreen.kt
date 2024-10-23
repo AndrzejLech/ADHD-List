@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -28,6 +29,7 @@ import androidx.compose.material3.TopAppBarColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +41,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.adhdlist.data.model.TaskList
 import com.example.adhdlist.presentation.common.AddTextField
 import com.example.adhdlist.presentation.view.tasks.viewmodel.TasksViewModel
+import com.example.adhdlist.util.Logger
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,7 +50,7 @@ fun TasksScreen(
     viewModel: TasksViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
-    val feedListState = viewModel.feedList.collectAsState(initial = mutableListOf())
+    val feedList by viewModel.feedList.collectAsState()
     val listData = viewModel.listData.collectAsState(initial = list)
     val uiState = viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -86,7 +89,11 @@ fun TasksScreen(
                         IconButton(
                             onClick = {
                                 Log.d("TasksScreen", "Edit Click")
-                                viewModel.triggerCommand(TasksViewModel.Command.ChangeUiState(TasksViewModel.UiState.Edit))
+                                viewModel.triggerCommand(
+                                    TasksViewModel.Command.ChangeUiState(
+                                        TasksViewModel.UiState.Edit
+                                    )
+                                )
                             },
                         ) {
                             Icon(
@@ -99,7 +106,7 @@ fun TasksScreen(
                 actions = {
                     IconButton(
                         onClick = {
-
+                            viewModel.triggerCommand(TasksViewModel.Command.RefreshTasks)
                         },
                     ) {
                         Icon(
@@ -131,15 +138,14 @@ fun TasksScreen(
                     value = viewModel.newTaskMessage.value,
                     onTextChanged = { viewModel.newTaskMessage.value = it },
                     onAddButtonClick = {
-                        Log.d("TasksScreen", "ui clicked")
                         when (uiState.value) {
                             TasksViewModel.UiState.Edit -> viewModel.triggerCommand(TasksViewModel.Command.UpdateListName)
                             TasksViewModel.UiState.Normal -> viewModel.triggerCommand(TasksViewModel.Command.AddButtonClick)
                         }
                     },
-                    placeholder = when(uiState.value){
-                        TasksViewModel.UiState.Normal -> "Type in here to add task"
-                        TasksViewModel.UiState.Edit -> "Type here to edit list name"
+                    placeholder = when (uiState.value) {
+                        TasksViewModel.UiState.Normal -> "Type in here to add task."
+                        TasksViewModel.UiState.Edit -> "Type here to edit list name."
 
                     }
                 )
@@ -153,25 +159,34 @@ fun TasksScreen(
                 .verticalScroll(rememberScrollState())
                 .heightIn(max = 300.dp),
         ) {
-            feedListState.value.forEachIndexed { index, item ->
-                item {
-                    TaskListElement(
-                        index = index + 1,
-                        task = item,
-                        onItemSwiped = {
-                            viewModel.triggerCommand(TasksViewModel.Command.SwipeTaskDelete(item))
-                        },
-                        onCheckboxClicked = {
-                            item.state = it
-                            viewModel.triggerCommand(TasksViewModel.Command.ChangeState(item))
-                        })
-                }
+            Logger.d("TasksScreen", "LazyColumn", "$feedList" )
+            itemsIndexed(feedList, key = { _, task -> task.id }) { index, item ->
+
+
+                TaskListElement(
+                    index = index,
+                    message = item.message,
+                    state = item.state,
+                    onItemSwiped = {
+                        Logger.d("TaskScreen", "onItemSwiped", "'${item.message}' Swiped")
+                        viewModel.triggerCommand(TasksViewModel.Command.SwipeTaskDelete(item))
+                    },
+                    onCheckboxClicked = {
+                        item.state = it
+                        Logger.d("TaskScreen", "onCheckboxClicked", "'${item.message}' state: ${item.state}")
+                        viewModel.triggerCommand(TasksViewModel.Command.ChangeState(item))
+                    })
             }
         }
     }
     BackHandler {
-        when(uiState.value){
-            TasksViewModel.UiState.Edit -> viewModel.triggerCommand(TasksViewModel.Command.ChangeUiState(TasksViewModel.UiState.Normal))
+        when (uiState.value) {
+            TasksViewModel.UiState.Edit -> viewModel.triggerCommand(
+                TasksViewModel.Command.ChangeUiState(
+                    TasksViewModel.UiState.Normal
+                )
+            )
+
             TasksViewModel.UiState.Normal -> viewModel.triggerCommand(TasksViewModel.Command.NavigateBack)
         }
     }
@@ -195,7 +210,7 @@ fun TasksScreen(
     }
     LaunchedEffect(key1 = viewModel.uiState) {
         Log.d("TasksScreen", "Changing state")
-        viewModel.uiState.collect{ newState ->
+        viewModel.uiState.collect { newState ->
             when (newState) {
                 TasksViewModel.UiState.Edit -> {
                     Log.d("TaskScreen", "Ui: StateEdit")
