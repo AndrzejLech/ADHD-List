@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.tooling.preview.Preview
@@ -49,13 +50,15 @@ fun AddTextField(
         modifier = modifier,
         keyboardOptions = KeyboardOptions.Default.copy(capitalization = KeyboardCapitalization.Sentences),
         trailingIcon = {
-            IconButton(onClick = {
+            IconButton(
+                modifier = Modifier.testTag("AddButton"),
+                onClick = {
                 onAddButtonClick()
                 textFieldValue = TextFieldValue("")
             }) {
                 Icon(imageVector = Icons.Filled.Add, contentDescription = "Add")
             }
         },
-        placeholder = { Text(placeholder) }
+        placeholder = { Text(placeholder) },
     )
 }

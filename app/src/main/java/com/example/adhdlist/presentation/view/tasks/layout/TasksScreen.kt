@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.adhdlist.data.model.TaskList
@@ -85,7 +86,10 @@ fun TasksScreen(
                     Row(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(text = listData.value.name)
+                        Text(
+                            modifier = Modifier.testTag("Title"),
+                            text = listData.value.name
+                        )
                         IconButton(
                             onClick = {
                                 Log.d("TasksScreen", "Edit Click")
@@ -133,6 +137,7 @@ fun TasksScreen(
             ) {
                 AddTextField(
                     modifier = Modifier
+                        .testTag("TasksTextField")
                         .focusRequester(focusRequester)
                         .fillMaxWidth(),
                     value = viewModel.newTaskMessage.value,
@@ -154,6 +159,7 @@ fun TasksScreen(
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
+                .testTag("TaskLazyList")
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
@@ -161,8 +167,6 @@ fun TasksScreen(
         ) {
             Logger.d("TasksScreen", "LazyColumn", "$feedList" )
             itemsIndexed(feedList, key = { _, task -> task.id }) { index, item ->
-
-
                 TaskListElement(
                     index = index,
                     message = item.message,

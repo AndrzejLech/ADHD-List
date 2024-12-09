@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -43,11 +44,12 @@ import kotlin.math.roundToInt
 @Preview
 @Composable
 private fun TaskListElementPreview() {
-    TaskListListElement(taskList = TaskList("Zadania na dzis"), onItemSwiped = {}, onClicked = {})
+    TaskListListElement(index = 0, taskList = TaskList("Zadania na dzis"), onItemSwiped = {}, onClicked = {})
 }
 
 @Composable
 fun TaskListListElement(
+    index: Int,
     taskList: TaskList,
     onItemSwiped: () -> Unit,
     onClicked: () -> Unit,
@@ -64,6 +66,7 @@ fun TaskListListElement(
         modifier = Modifier
             .fillMaxWidth()
             .wrapContentHeight()
+            .testTag("TaskListListElement$index")
     ) {
         Box(
             modifier = Modifier

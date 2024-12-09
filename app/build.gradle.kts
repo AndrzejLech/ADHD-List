@@ -1,8 +1,9 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
+    alias(libs.plugins.composeCompailer)
     alias(libs.plugins.hilt)
-    kotlin("kapt")
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -16,7 +17,7 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "com.example.adhdlist.utils.CustomTestRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -52,6 +53,10 @@ android {
 }
 
 dependencies {
+    androidTestImplementation(libs.hiltTesting)
+    ksp(libs.android.room.compiler)
+    ksp(libs.hilt.compiler)
+
     implementation(libs.coroutines)
     implementation(libs.hilt.android)
     implementation(libs.hilt.navigation.compose)
@@ -61,10 +66,8 @@ dependencies {
     implementation(libs.androidx.room.common)
     implementation(libs.androidx.room.ktx)
     implementation(libs.androidx.compose.material)
-    kapt(libs.android.room.compiler)
     implementation(libs.androidx.appcompat)
     implementation(libs.android.compose.material.icons.extended)
-    kapt(libs.hilt.compiler)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.androidx.compose.runtime)
@@ -74,11 +77,19 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.gson)
+
     testImplementation(libs.junit)
+    testImplementation(libs.mockk)
+    testImplementation(libs.hiltTesting)
+    testImplementation(libs.kotlinx.coroutines.test)
+
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.ui.test.junit4)
+    androidTestImplementation(libs.test.ui.kakao)
+    androidTestImplementation(libs.test.ui.kakao.compose)
+
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 }

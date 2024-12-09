@@ -115,7 +115,7 @@ class ListsViewModel @Inject constructor(
                     }
                 }
 
-                is Result.Error -> Error.UnknownError(result.error)
+                is Result.Error -> _errors.send(Error.UnknownError(result.error))
             }
         }
     }

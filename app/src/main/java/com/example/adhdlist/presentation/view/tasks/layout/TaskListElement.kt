@@ -35,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.tooling.preview.Preview
@@ -88,6 +89,7 @@ fun TaskListElement(
     }
     Box(
         modifier = Modifier
+            .testTag("TaskListElement$index")
             .fillMaxWidth()
             .wrapContentHeight()
     ) {
@@ -236,7 +238,7 @@ fun TaskListElement(
                 Text(
                     modifier = Modifier
                         .height(IntrinsicSize.Max),
-                    text = "$index.",
+                    text = "${index + 1}. ",
                     fontSize = 18.sp,
                     style = if (state) TextStyle.Default.copy(
                         textDecoration = TextDecoration.LineThrough,
@@ -252,6 +254,7 @@ fun TaskListElement(
                     Text(
                         messageState,
                         modifier = Modifier
+                            .testTag("TaskText")
                             .height(IntrinsicSize.Max)
                             .fillMaxWidth()
                             .padding(2.dp),
@@ -264,7 +267,9 @@ fun TaskListElement(
                 }
                 CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
                     Checkbox(
-                        modifier = Modifier.padding(2.dp),
+                        modifier = Modifier
+                            .testTag("TaskCheckBox")
+                            .padding(2.dp),
                         checked = state,
                         onCheckedChange = { isChecked ->
                             onCheckboxClicked(isChecked)

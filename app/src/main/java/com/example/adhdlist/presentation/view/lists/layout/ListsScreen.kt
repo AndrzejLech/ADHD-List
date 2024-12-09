@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -22,6 +23,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.adhdlist.presentation.common.AddTextField
@@ -52,7 +54,9 @@ fun ListsScreen(
         },
         bottomBar = {
             AddTextField(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .testTag("ListsTextField")
+                    .fillMaxWidth(),
                 value = viewModel.newListName,
                 onTextChanged = {
                     viewModel.newListName = it
@@ -66,27 +70,27 @@ fun ListsScreen(
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
+                .testTag("ListLazyList")
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
                 .heightIn(max = 300.dp),
         ) {
-            feedListState.value.forEach { item ->
-                item {
-                    Log.d("ListScreen", item.toString())
-                    TaskListListElement(
-                        taskList = item,
-                        onClicked = {
-                            viewModel.triggerCommand(ListsViewModel.Command.NavigateToList(item))
-                        },
-                        onItemSwiped = {
-                            viewModel.triggerCommand(ListsViewModel.Command.DeleteList(item))
-                        }
-                    )
-                }
+            itemsIndexed(feedListState.value) { index, item ->
+                Log.d("ListScreen", item.toString())
+                TaskListListElement(
+                    index = index,
+                    taskList = item,
+                    onClicked = {
+                        viewModel.triggerCommand(ListsViewModel.Command.NavigateToList(item))
+                    },
+                    onItemSwiped = {
+                        viewModel.triggerCommand(ListsViewModel.Command.DeleteList(item))
+                    }
+                )
             }
-
         }
+
     }
     LaunchedEffect(key1 = Unit) {
         viewModel.getTaskList()

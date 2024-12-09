@@ -34,6 +34,15 @@ class ListRepository(context: Context) {
         }
     }
 
+    fun cleanDatabaseForTests(): Result<Boolean, Exception>{
+        return try {
+            listDao.clearLists()
+            Result.Success(true)
+        } catch (e: Exception){
+            Result.Error(e)
+        }
+    }
+
     suspend fun insertList(taskList: TaskList): Result<Boolean, Exception> {
         return try {
             listDao.insert(taskList)
