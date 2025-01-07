@@ -1,58 +1,35 @@
-ADHD List is a productivity app designed to help individuals with ADHD manage quick notes and to-do lists effortlessly. The app prioritizes simplicity and efficiency, making it easier to stay organized and focused.
-Features
-Create and manage quick notes and to-do lists.
-Intuitive, distraction-free interface built with Jetpack Compose.
-Persistent storage with Room Database for seamless data retention.
-Scalable and maintainable codebase using Clean Architecture principles.
+# ADHD List
+ADHD List is a productivity-focused app designed,
+to help people with ADHD easily manage quick notes and to-do lists.
+The app focuses on simplicity and efficiency, making it easy to organise and focus on tasks.
 
-Tech Stack
+### Features:
+- Create and manage quick notes and to-do lists.
+- Intuitive, distraction-free interface based on Jetpack Compose.
+- Durable storage with Room Database for seamless data storage and offline operation.
+- Scalable and maintainable code base using clean architecture principles.
 
-Hilt: Dependency injection for modular and testable code.
-Room Database: Local data storage for notes and tasks.
-Jetpack Compose: Modern UI toolkit for building responsive interfaces.
-Coroutines: Simplified asynchronous programming for smooth user experiences.
+### Technology stack:
+- Hilt: Dependency injection for modular and testable code.
+- Room Database: Local data storage for notes and tasks.
+- Jetpack Compose: A modern UI toolkit for creating responsive interfaces.
+- Coroutines: Simplified asynchronous programming for a seamless user experience.
 
-Testing
+### Tests:
+- Comprehensive unit tests.
+- Instrumentation tests.
 
-Comprehensive unit tests to ensure functionality and robustness.
-Instrumentation tests for validating user flows and behavior.
+### Architecture:
+- MVVM,
+- Clean Architecture,
 
-Architecture
+This is a repository demonstrating best practices for Android application development,
+using high-level solutions and the latest technologies available.
 
-The app adheres to Clean Architecture: 
+### Application overview:
 
-ViewModels: Handle UI-related data.
-Use Cases: Encapsulate business logic.
-Repositories: Abstract data sources.
-Models: Represent the core application data.
+Translated with DeepL.com (free version)****
 
-This repository demonstrates modern Android development best practices, focusing on scalability, readability, and maintainability.ADHD List is a productivity app designed to help individuals with ADHD manage quick notes and to-do lists effortlessly. The app prioritizes simplicity and efficiency, making it easier to stay organized and focused.
-Features
-
-Create and manage quick notes and to-do lists.
-Intuitive, distraction-free interface built with Jetpack Compose.
-Persistent storage with Room Database for seamless data retention.
-Scalable and maintainable codebase using Clean Architecture principles.
-
-Tech Stack
-
-Hilt: Dependency injection for modular and testable code.
-Room Database: Local data storage for notes and tasks.
-Jetpack Compose: Modern UI toolkit for building responsive interfaces.
-Coroutines: Simplified asynchronous programming for smooth user experiences.
-
-Testing
-
-Comprehensive unit tests to ensure functionality and robustness.
-Instrumentation tests for validating user flows and behavior.
-
-Architecture
-
-The app adheres to Clean Architecture:
-
-ViewModels: Handle UI-related data.
-Use Cases: Encapsulate business logic.
-Repositories: Abstract data sources.
-Models: Represent the core application data.
-
-This repository demonstrates modern Android development best practices, focusing on scalability, readability, and maintainability.
+| Main screen when adding lists:                                    | Main screen with several lists:                                      | List screen with many tasks:                                      | List screen during deletion:                                         |
+|-------------------------------------------------------------------|----------------------------------------------------------------------|-------------------------------------------------------------------|----------------------------------------------------------------------|
+| <img src="/screenshots/starting_screen_typing.png" width="200px"> | <img src="/screenshots/starting_screen_lists.png" width="200px">     | <img src="/screenshots/details_screen_base.png" width="200px">    | <img src="/screenshots/details_screen_mid_delete.png" width="200px"> |
