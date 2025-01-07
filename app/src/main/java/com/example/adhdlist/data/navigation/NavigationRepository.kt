@@ -1,5 +1,6 @@
 package com.example.adhdlist.data.navigation
 
+import android.net.Uri
 import android.util.Log
 import androidx.navigation.NavController
 import com.example.adhdlist.data.model.TaskList
@@ -19,6 +20,7 @@ class NavigationRepository {
     }
 
     fun navigateToList(list: TaskList){
+        list.name = Uri.encode(list.name)
         navController.navigate(
             "${Destinations.TasksScreen.value}/{list}"
             .replace(oldValue = "{list}", newValue =  Gson().toJson(list))
