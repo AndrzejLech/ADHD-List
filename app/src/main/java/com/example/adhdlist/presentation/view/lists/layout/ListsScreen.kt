@@ -78,7 +78,7 @@ fun ListsScreen(
         ) {
             itemsIndexed(feedListState.value) { index, item ->
                 Log.d("ListScreen", item.toString())
-                TaskListListElement(
+                ListElement(
                     index = index,
                     taskList = item,
                     onClicked = {

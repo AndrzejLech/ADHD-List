@@ -47,8 +47,8 @@ import kotlin.math.roundToInt
 
 @Preview
 @Composable
-private fun TaskListElementPreview() {
-    TaskListElement(
+private fun TaskElementPreview() {
+    TaskElement(
         index = 1,
         message = "Wykąpać psa",
         state = false,
@@ -59,8 +59,8 @@ private fun TaskListElementPreview() {
 
 @Preview
 @Composable
-private fun TaskListElementDonePreview() {
-    TaskListElement(
+private fun TaskElementDonePreview() {
+    TaskElement(
         index = 1,
         message = "Wykąpać psa",
         state = true,
@@ -71,7 +71,7 @@ private fun TaskListElementDonePreview() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TaskListElement(
+fun TaskElement(
     index: Int,
     message: String,
     state: Boolean,

@@ -43,12 +43,12 @@ import kotlin.math.roundToInt
 
 @Preview
 @Composable
-private fun TaskListElementPreview() {
-    TaskListListElement(index = 0, taskList = TaskList("Zadania na dzis"), onItemSwiped = {}, onClicked = {})
+private fun ListElementPreview() {
+    ListElement(index = 0, taskList = TaskList("Zadania na dzis"), onItemSwiped = {}, onClicked = {})
 }
 
 @Composable
-fun TaskListListElement(
+fun ListElement(
     index: Int,
     taskList: TaskList,
     onItemSwiped: () -> Unit,
@@ -171,6 +171,13 @@ fun TaskListListElement(
                                         )
                                     )
                                     onItemSwiped()
+                                    offset.animateTo(
+                                        targetValue = -0f,
+                                        animationSpec = tween(
+                                            durationMillis = 0,
+                                            delayMillis = 0
+                                        )
+                                    )
                                 }
 
                                 offset.value <= -500 -> {
@@ -182,6 +189,13 @@ fun TaskListListElement(
                                         )
                                     )
                                     onItemSwiped()
+                                    offset.animateTo(
+                                        targetValue = -0f,
+                                        animationSpec = tween(
+                                            durationMillis = 0,
+                                            delayMillis = 0
+                                        )
+                                    )
                                 }
                             }
                         }

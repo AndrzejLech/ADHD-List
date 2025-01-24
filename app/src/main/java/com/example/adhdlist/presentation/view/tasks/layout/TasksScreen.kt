@@ -167,7 +167,7 @@ fun TasksScreen(
         ) {
             Logger.d("TasksScreen", "LazyColumn", "$feedList" )
             itemsIndexed(feedList, key = { _, task -> task.id }) { index, item ->
-                TaskListElement(
+                TaskElement(
                     index = index,
                     message = item.message,
                     state = item.state,
