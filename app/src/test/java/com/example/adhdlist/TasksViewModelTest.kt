@@ -9,7 +9,6 @@ import com.example.adhdlist.domain.util.Result
 import com.example.adhdlist.presentation.view.tasks.viewmodel.TasksViewModel
 import com.example.adhdlist.presentation.view.tasks.viewmodel.TasksViewModel.Action
 import com.example.adhdlist.presentation.view.tasks.viewmodel.TasksViewModel.Command
-import com.example.adhdlist.presentation.view.tasks.viewmodel.TasksViewModel.UiState
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -28,11 +27,12 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
-// Regression tests for docs/STATE_MACHINES.md issues 2 and 3 on the tasks screen.
+// Regression tests for docs/STATE_MACHINES.md on the tasks screen.
 class TasksViewModelTest {
     private val dispatcher = UnconfinedTestDispatcher()
     private val taskRepository: TaskRepository = mockk()
@@ -44,9 +44,10 @@ class TasksViewModelTest {
     fun setUp() {
         Dispatchers.setMain(dispatcher)
         coEvery { taskRepository.insertTask(any()) } coAnswers { delay(100); Result.Success(true) }
+        coEvery { taskRepository.updateTask(any()) } returns Result.Success(true)
         coEvery { listRepository.updateList(any()) } coAnswers { delay(100); Result.Success(true) }
         vm = TasksViewModel(taskRepository, listRepository, navigationRepository)
-        vm.list = TaskList("Groceries").apply { id = 1 }
+        vm.list = TaskList("Groceries").apply { id = 1; position = 4; remoteId = "r1" }
     }
 
     @After
@@ -59,17 +60,56 @@ class TasksViewModelTest {
     }
 
     @Test
-    fun `cancelling edit does not turn the prefilled list name into a task`() = runTest(dispatcher) {
+    fun `rename does not touch the add-task text`() = runTest(dispatcher) {
         collectActions()
-        vm.triggerCommand(Command.ChangeUiState(UiState.Edit))
-        assertEquals(UiState.Edit, vm.uiState.value)
-        vm.newTaskMessage.value = "Groceries" // TasksScreen prefills the list name on entering Edit
-        vm.triggerCommand(Command.ChangeUiState(UiState.Normal))
-        vm.triggerCommand(Command.AddButtonClick)
+        vm.newTaskMessage.value = "milk"
+        vm.triggerCommand(Command.RenameList("Shopping"))
         advanceUntilIdle()
 
-        assertEquals("", vm.newTaskMessage.value)
-        coVerify(exactly = 0) { taskRepository.insertTask(any()) }
+        coVerify(exactly = 1) { listRepository.updateList(match { it.name == "Shopping" }) }
+        assertEquals("milk", vm.newTaskMessage.value)
+    }
+
+    @Test
+    fun `rename trims and keeps id, position and remote id`() = runTest(dispatcher) {
+        collectActions()
+        vm.triggerCommand(Command.RenameList("  Shopping "))
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            listRepository.updateList(match { it.name == "Shopping" && it.id == 1 && it.position == 4 && it.remoteId == "r1" })
+        }
+    }
+
+    @Test
+    fun `editing an item trims the text and keeps its id, state and position`() = runTest(dispatcher) {
+        collectActions()
+        coEvery { taskRepository.editTask(any()) } returns Result.Success(true)
+        val item = Task(1, "milk", state = true, id = 7, position = 2, remoteId = "t7")
+        vm.triggerCommand(Command.EditItem(item, "  oat milk "))
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { taskRepository.editTask(item.copy(message = "oat milk")) }
+    }
+
+    @Test
+    fun `editing an item to blank or to the same text writes nothing`() = runTest(dispatcher) {
+        collectActions()
+        val item = Task(1, "milk", id = 7)
+        vm.triggerCommand(Command.EditItem(item, "   "))
+        vm.triggerCommand(Command.EditItem(item, "milk"))
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { taskRepository.editTask(any()) }
+    }
+
+    @Test
+    fun `blank rename is rejected`() = runTest(dispatcher) {
+        collectActions()
+        vm.triggerCommand(Command.RenameList("   "))
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { listRepository.updateList(any()) }
     }
 
     @Test
@@ -84,6 +124,17 @@ class TasksViewModelTest {
     }
 
     @Test
+    fun `task longer than the shared-list limit is rejected, not silently dropped later`() = runTest(dispatcher) {
+        collectActions()
+        vm.newTaskMessage.value = "x".repeat(1001)
+        vm.triggerCommand(Command.AddButtonClick)
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { taskRepository.insertTask(any()) }
+        assertEquals(1001, vm.newTaskMessage.value.length) // kept, so the user can shorten it
+    }
+
+    @Test
     fun `failed insert gives the text back`() = runTest(dispatcher) {
         collectActions()
         coEvery { taskRepository.insertTask(any()) } returns Result.Error(Exception("db"))
@@ -95,28 +146,31 @@ class TasksViewModelTest {
     }
 
     @Test
-    fun `blank rename is rejected`() = runTest(dispatcher) {
+    fun `checking a task writes a new row and leaves the shown one alone`() = runTest(dispatcher) {
         collectActions()
-        vm.triggerCommand(Command.ChangeUiState(UiState.Edit))
-        vm.newTaskMessage.value = "   "
-        vm.triggerCommand(Command.UpdateListName)
+        val shown = Task(1, "milk", state = false).apply { id = 7; position = 2; remoteId = "t7" }
+        vm.triggerCommand(Command.ChangeState(shown, checked = true))
         advanceUntilIdle()
 
-        coVerify(exactly = 0) { listRepository.updateList(any()) }
-        assertEquals("Groceries", vm.list.name)
+        coVerify(exactly = 1) {
+            taskRepository.updateTask(match { it.id == 7 && it.state && it.position == 2 && it.remoteId == "t7" })
+        }
+        assertFalse(shown.state)
     }
 
     @Test
-    fun `second queued rename does not blank the list name`() = runTest(dispatcher) {
+    fun `drag then drop saves the new order`() = runTest(dispatcher) {
         collectActions()
-        vm.newTaskMessage.value = " Shopping "
-        vm.handleAction(Action.UpdateListName)
-        vm.handleAction(Action.UpdateListName)
+        val tasks = (1..3).map { Task(1, "t$it").apply { id = it } }
+        every { taskRepository.getTasks(1) } returns Result.Success(MutableStateFlow(tasks.toMutableList()))
+        coEvery { taskRepository.reorderTasks(1, any()) } returns Result.Success(true)
+        vm.getTasks(1)
+
+        vm.moveTask(0, 2)
+        vm.triggerCommand(Command.SaveOrder)
         advanceUntilIdle()
 
-        coVerify(exactly = 1) { listRepository.updateList(any()) }
-        assertEquals("Shopping", vm.list.name)
-        assertEquals(UiState.Normal, vm.uiState.value)
+        coVerify(exactly = 1) { taskRepository.reorderTasks(1, match { it.map(Task::id) == listOf(2, 3, 1) }) }
     }
 
     @Test
@@ -149,14 +203,12 @@ class TasksViewModelTest {
     fun `list deleted while its screen is open navigates back instead of showing null`() = runTest(dispatcher) {
         val list = MutableStateFlow<TaskList?>(TaskList("Groceries").apply { id = 1 })
         every { listRepository.getList(1) } returns Result.Success(list)
-        val shown = mutableListOf<TaskList>()
-        backgroundScope.launch { vm.listData.collect { shown += it } }
 
         vm.getListData(1)
         list.value = null // Room's emission after the row is deleted
         advanceUntilIdle()
 
         verify(exactly = 1) { navigationRepository.popNavigation() }
-        assertEquals(listOf("Groceries"), shown.map { it.name })
+        assertEquals("Groceries", vm.listData.value?.name)
     }
 }

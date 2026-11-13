@@ -6,12 +6,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewModelScope
+import com.example.adhdlist.data.model.ListWithProgress
 import com.example.adhdlist.data.model.TaskList
 import com.example.adhdlist.data.navigation.NavigationRepository
+import com.example.adhdlist.data.remote.SharedListsRemote
 import com.example.adhdlist.data.room.list.ListRepository
 import com.example.adhdlist.domain.database.lists.CreateListUseCase
 import com.example.adhdlist.domain.database.lists.DeleteListUseCase
 import com.example.adhdlist.domain.database.lists.GetListsUseCase
+import com.example.adhdlist.domain.database.lists.JoinListUseCase
+import com.example.adhdlist.domain.database.lists.ReorderListsUseCase
+import com.example.adhdlist.domain.database.lists.UpdateListUseCase
 import com.example.adhdlist.domain.navigation.NavigateToListUseCase
 import com.example.adhdlist.domain.util.Result
 import com.example.adhdlist.presentation.base.BaseViewModel
@@ -34,9 +39,10 @@ class ListsViewModel @Inject constructor(
     override val TAG: String = "ListViewModel"
     var newListName by mutableStateOf("")
     var errorMessage: String = ""
+    val canShare: Boolean get() = listRepository.canShare
 
-    private val _feedList = MutableStateFlow<MutableList<TaskList>>(mutableListOf())
-    val feedList: StateFlow<MutableList<TaskList>> = _feedList.asStateFlow()
+    private val _feedList = MutableStateFlow<MutableList<ListWithProgress>>(mutableListOf())
+    val feedList: StateFlow<MutableList<ListWithProgress>> = _feedList.asStateFlow()
     private var feedJob: Job? = null
 
     private val _actions = Channel<BaseAction>()
@@ -44,6 +50,10 @@ class ListsViewModel @Inject constructor(
 
     private val _errors = Channel<BaseError>()
     val errors: Flow<BaseError> = _errors.receiveAsFlow()
+
+    // Neutral confirmations for the snackbar (not errors).
+    private val _messages = Channel<String>()
+    val messages: Flow<String> = _messages.receiveAsFlow()
 
     override fun triggerCommand(command: BaseCommand) {
         viewModelScope.launch {
@@ -55,7 +65,17 @@ class ListsViewModel @Inject constructor(
                 }
 
                 is Command.DeleteList -> _actions.send(Action.DeleteList(command.list))
+                is Command.RenameList -> if (command.name.isNotBlank()) {
+                    _actions.send(Action.RenameList(command.list.copy(name = command.name.trim())))
+                } else {
+                    _errors.send(Error.EmptyListName)
+                }
                 is Command.NavigateToList -> _actions.send(Action.NavigateToList(command.list))
+                Command.SaveOrder -> _actions.send(Action.SaveOrder)
+                is Command.Join -> {
+                    val code = SharedListsRemote.findJoinCode(command.text)
+                    if (code != null) _actions.send(Action.Join(code)) else _errors.send(Error.InvalidJoinCode)
+                }
             }
         }
     }
@@ -65,7 +85,13 @@ class ListsViewModel @Inject constructor(
             when (action) {
                 Action.CreateList -> createList()
                 is Action.DeleteList -> deleteList(action.list)
+                is Action.RenameList -> {
+                    val result = UpdateListUseCase(listRepository).execute(action.list)
+                    if (result is Result.Error) _errors.send(Error.UnknownError(result.error))
+                }
                 is Action.NavigateToList -> navigateToList(action.list)
+                Action.SaveOrder -> saveOrder()
+                is Action.Join -> join(action.code)
             }
         }
     }
@@ -73,6 +99,8 @@ class ListsViewModel @Inject constructor(
     override fun handleError(context: Context, error: BaseError) {
         when (error) {
             is Error.EmptyListName -> errorMessage = "List name cannot be empty."
+            is Error.InvalidJoinCode -> errorMessage = "That doesn't look like a join code. It has 20 letters and digits."
+            is Error.JoinFailed -> errorMessage = "Couldn't join. Check the code and your internet connection."
             is Error.UnknownError -> {
                 errorMessage = "Something went wrong."
                 Log.e(TAG, error.toString())
@@ -113,6 +141,30 @@ class ListsViewModel @Inject constructor(
         }
     }
 
+    /** Called on every drag step; only reorders what is shown. [saveOrder] persists on drop. */
+    fun moveList(from: Int, to: Int) {
+        _feedList.value = _feedList.value.toMutableList().apply { add(to, removeAt(from)) }
+    }
+
+    private fun saveOrder() {
+        viewModelScope.launch {
+            val result = ReorderListsUseCase(listRepository).execute(_feedList.value.map { it.list })
+            if (result is Result.Error) _errors.send(Error.UnknownError(result.error))
+        }
+    }
+
+    private fun join(code: String) {
+        viewModelScope.launch {
+            when (val result = JoinListUseCase(listRepository).execute(code)) {
+                is Result.Success -> _messages.send("Joined. The list will appear in a moment.")
+                is Result.Error -> {
+                    Log.e(TAG, "join", result.error)
+                    _errors.send(Error.JoinFailed)
+                }
+            }
+        }
+    }
+
     fun getTaskList() {
         // Called on every screen entry; one Room subscription per ViewModel is enough, StateFlow replays it.
         if (feedJob != null) return
@@ -133,18 +185,26 @@ class ListsViewModel @Inject constructor(
 
     sealed class Command : BaseCommand() {
         object AddButtonClick : BaseCommand()
+        object SaveOrder : BaseCommand()
         data class NavigateToList(val list: TaskList) : BaseCommand()
         data class DeleteList(val list: TaskList) : BaseCommand()
+        data class RenameList(val list: TaskList, val name: String) : BaseCommand()
+        data class Join(val text: String) : BaseCommand()
     }
 
     sealed class Action : BaseAction() {
         object CreateList : BaseAction()
+        object SaveOrder : BaseAction()
         data class DeleteList(val list: TaskList) : BaseAction()
+        data class RenameList(val list: TaskList) : BaseAction()
         data class NavigateToList(val list: TaskList) : BaseAction()
+        data class Join(val code: String) : BaseAction()
     }
 
     sealed class Error : BaseError() {
         object EmptyListName : BaseError()
+        object InvalidJoinCode : BaseError()
+        object JoinFailed : BaseError()
         data class UnknownError(val cause: Exception) : BaseError()
     }
 }

@@ -1,0 +1,56 @@
+rules_version = '2';
+
+// lists/{listId}: {name, members: [uid]}. The listId is random (about 119 bits) and doubles as
+// the join code, so knowing it is what lets someone join.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isMember(list) { return signedIn() && request.auth.uid in list.members; }
+    function onlyChanges(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+    function membersAfter() { return request.resource.data.members.toSet(); }
+    function membersBefore() { return resource.data.members.toSet(); }
+    function me() { return [request.auth.uid].toSet(); }
+
+    match /lists/{listId} {
+      // Creator must be the only member.
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['name', 'members'])
+        && request.resource.data.name is string
+        && request.resource.data.members == [request.auth.uid];
+
+      // Reading one list by id is how joining works; queries only return your own lists.
+      allow get: if signedIn();
+      allow list: if isMember(resource.data);
+
+      allow update: if
+        // members rename
+        (isMember(resource.data) && onlyChanges(['name']) && request.resource.data.name is string)
+        // anyone with the code adds only themselves
+        || (signedIn() && onlyChanges(['members']) && membersAfter() == membersBefore().union(me()))
+        // a member removes only themselves
+        || (isMember(resource.data) && onlyChanges(['members']) && membersAfter() == membersBefore().difference(me()));
+
+      allow delete: if false;
+
+      match /tasks/{taskId} {
+        function listPath() { return /databases/$(database)/documents/lists/$(listId); }
+        // Writes check the list as it will be after the write: sharing creates the list and its
+        // tasks in one batch, and get() would not see the list yet.
+        function listAfter() { return getAfter(listPath()).data; }
+        function validTask() {
+          return request.resource.data.keys().hasOnly(['message', 'state', 'position'])
+            && request.resource.data.message is string
+            && request.resource.data.message.size() <= 1000
+            && request.resource.data.state is bool
+            && request.resource.data.position is int;
+        }
+        allow read: if isMember(get(listPath()).data);
+        allow delete: if isMember(listAfter());
+        allow create, update: if isMember(listAfter()) && validTask();
+      }
+    }
+  }
+}
