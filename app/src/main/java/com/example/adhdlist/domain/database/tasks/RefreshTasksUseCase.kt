@@ -6,5 +6,5 @@ import javax.inject.Inject
 class RefreshTasksUseCase @Inject constructor(
     private val taskRepository: TaskRepository
 ) {
-    fun execute(listId: Int) = taskRepository.resetAllTasks(listId)
+    suspend fun execute(listId: Int) = taskRepository.resetAllTasks(listId)
 }

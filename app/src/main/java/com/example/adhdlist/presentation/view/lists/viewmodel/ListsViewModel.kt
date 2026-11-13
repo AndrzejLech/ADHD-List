@@ -2,6 +2,9 @@ package com.example.adhdlist.presentation.view.lists.viewmodel
 
 import android.content.Context
 import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewModelScope
 import com.example.adhdlist.data.model.TaskList
 import com.example.adhdlist.data.navigation.NavigationRepository
@@ -13,8 +16,12 @@ import com.example.adhdlist.domain.navigation.NavigateToListUseCase
 import com.example.adhdlist.domain.util.Result
 import com.example.adhdlist.presentation.base.BaseViewModel
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -25,11 +32,12 @@ class ListsViewModel @Inject constructor(
     private val navigationRepository: NavigationRepository
 ) : BaseViewModel() {
     override val TAG: String = "ListViewModel"
-    var newListName: String = ""
+    var newListName by mutableStateOf("")
     var errorMessage: String = ""
 
-    private var _feedList = Channel<MutableList<TaskList>>()
-    var feedList: Flow<MutableList<TaskList>> = _feedList.receiveAsFlow()
+    private val _feedList = MutableStateFlow<MutableList<TaskList>>(mutableListOf())
+    val feedList: StateFlow<MutableList<TaskList>> = _feedList.asStateFlow()
+    private var feedJob: Job? = null
 
     private val _actions = Channel<BaseAction>()
     val actions: Flow<BaseAction> = _actions.receiveAsFlow()
@@ -65,27 +73,28 @@ class ListsViewModel @Inject constructor(
     override fun handleError(context: Context, error: BaseError) {
         when (error) {
             is Error.EmptyListName -> errorMessage = "List name cannot be empty."
-            is Error.UnknownError -> Log.e(TAG, error.toString())
+            is Error.UnknownError -> {
+                errorMessage = "Something went wrong."
+                Log.e(TAG, error.toString())
+            }
         }
 
     }
 
     private fun createList() {
+        // Take the text before suspending so a double tap can't insert it twice.
+        val name = newListName.trim()
+        if (name.isEmpty()) return
+        newListName = ""
         viewModelScope.launch {
-            val result = CreateListUseCase(listRepository).execute(
-                TaskList(newListName.trim())
-            )
+            val result = CreateListUseCase(listRepository).execute(TaskList(name))
             when (result) {
-                is Result.Success -> {
-                    Log.d(TAG, "Created List")
-                    newListName = ""
-                }
+                is Result.Success -> Log.d(TAG, "Created List")
 
-                is Result.Error -> _errors.send(
-                    Error.UnknownError(
-                        result.error
-                    )
-                )
+                is Result.Error -> {
+                    if (newListName.isEmpty()) newListName = name
+                    _errors.send(Error.UnknownError(result.error))
+                }
             }
         }
     }
@@ -105,13 +114,15 @@ class ListsViewModel @Inject constructor(
     }
 
     fun getTaskList() {
-        viewModelScope.launch {
+        // Called on every screen entry; one Room subscription per ViewModel is enough, StateFlow replays it.
+        if (feedJob != null) return
+        feedJob = viewModelScope.launch {
             val result = GetListsUseCase(listRepository).execute()
             Log.d(TAG, "Getting tasks result: ${result.javaClass}")
             when (result) {
                 is Result.Success -> {
                     result.data.collect { item ->
-                        _feedList.send(item)
+                        _feedList.value = item
                     }
                 }
 

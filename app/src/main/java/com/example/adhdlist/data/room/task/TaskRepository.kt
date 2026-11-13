@@ -50,8 +50,7 @@ class TaskRepository(context: Context) {
         }
     }
 
-    @WorkerThread
-    fun resetAllTasks(listId: Int): Result<Boolean, Exception>{
+    suspend fun resetAllTasks(listId: Int): Result<Boolean, Exception>{
         return try {
             taskDao.resetAllTasks(listId)
             Result.Success(true)

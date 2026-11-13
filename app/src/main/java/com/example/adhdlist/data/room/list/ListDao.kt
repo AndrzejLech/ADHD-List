@@ -23,7 +23,7 @@ interface ListDao {
     fun getAllLists(): Flow<MutableList<TaskList>>
 
     @Query("SELECT * FROM task_list_table WHERE list_id LIKE :list_id")
-    fun getList(list_id: Int): Flow<TaskList>
+    fun getList(list_id: Int): Flow<TaskList?>
 
     @Query("DELETE FROM task_list_table")
     fun clearLists()

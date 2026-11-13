@@ -20,14 +20,15 @@ class NavigationRepository {
     }
 
     fun navigateToList(list: TaskList){
-        list.name = Uri.encode(list.name)
-        navController.navigate(
-            "${Destinations.TasksScreen.value}/{list}"
-            .replace(oldValue = "{list}", newValue =  Gson().toJson(list))
-        )
+        // A second tap lands while the first navigation is already on the back stack.
+        if (navController.currentDestination?.route != Destinations.ListsScreen.value) return
+        // Encode the JSON, not list.name: the object is the live item shown on the lists screen.
+        navController.navigate("${Destinations.TasksScreen.value}/${Uri.encode(Gson().toJson(list))}")
     }
 
     fun popNavigation(){
+        // Popping the start destination leaves an empty NavHost (blank screen) on a double back press.
+        if (navController.previousBackStackEntry == null) return
         Log.d("NavigationRepository", "Navigating back")
         navController.popBackStack()
     }
