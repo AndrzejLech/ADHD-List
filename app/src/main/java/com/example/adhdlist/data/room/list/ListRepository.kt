@@ -12,7 +12,7 @@ class ListRepository(context: Context) {
     private val taskDatabase = TaskDatabase.getInstance(context)
     private val listDao = taskDatabase.listDao()
     private var taskList: Flow<MutableList<TaskList>> = emptyFlow()
-    private var listData: Flow<TaskList> = emptyFlow()
+    private var listData: Flow<TaskList?> = emptyFlow()
 
     @WorkerThread
     fun getLists(): Result<Flow<MutableList<TaskList>>, Exception> {
@@ -25,7 +25,7 @@ class ListRepository(context: Context) {
     }
 
     @WorkerThread
-    fun getList(listId:Int): Result<Flow<TaskList>, Exception> {
+    fun getList(listId:Int): Result<Flow<TaskList?>, Exception> {
         return try {
             listData = listDao.getList(listId)
             Result.Success(listData)

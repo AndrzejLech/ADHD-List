@@ -26,16 +26,14 @@ import com.example.adhdlist.domain.util.Result
 import com.example.adhdlist.presentation.base.BaseViewModel
 import com.example.adhdlist.util.Logger
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @HiltViewModel
@@ -51,6 +49,7 @@ class TasksViewModel @Inject constructor(
 
     private var _feedList = MutableStateFlow<SnapshotStateList<Task>>(mutableStateListOf())
     var feedList: StateFlow<SnapshotStateList<Task>> = _feedList.asStateFlow()
+    private var tasksJob: Job? = null
 
     private var _listData = Channel<TaskList>()
     var listData: Flow<TaskList> = _listData.receiveAsFlow()
@@ -83,8 +82,13 @@ class TasksViewModel @Inject constructor(
                 }
 
                 is Command.UpdateListName -> {
-                    Logger.d(TAG, "Command", "UpdateListName")
-                    _actions.send(Action.UpdateListName)
+                    if (newTaskMessage.value.isNotBlank()) {
+                        Logger.d(TAG, "Command", "UpdateListName")
+                        _actions.send(Action.UpdateListName)
+                    } else {
+                        Logger.d(TAG, "Command", "EmptyListNameError")
+                        _errors.send(Error.EmptyListName)
+                    }
                 }
 
                 is Command.ChangeState -> {
@@ -164,13 +168,19 @@ class TasksViewModel @Inject constructor(
     override fun handleError(context: Context, error: BaseError) {
         when (error) {
             is Error.EmptyNewTask -> errorMessage = "Task cannot be empty."
-            is Error.UnknownError -> Log.e(TAG, error.toString())
+            is Error.EmptyListName -> errorMessage = "List name cannot be empty."
+            is Error.UnknownError -> {
+                errorMessage = "Something went wrong."
+                Log.e(TAG, error.toString())
+            }
         }
 
     }
 
     fun getTasks(listId: Int) {
-        viewModelScope.launch {
+        // Called again on every recomposition restart (e.g. rotation); keep a single Room subscription.
+        if (tasksJob != null) return
+        tasksJob = viewModelScope.launch {
             val result = GetTasksUseCase(taskRepository).execute(listId)
             Log.d(TAG, "Getting tasks result: ${result.javaClass}")
             when (result) {
@@ -196,7 +206,8 @@ class TasksViewModel @Inject constructor(
                 is Result.Success -> {
                     Logger.d(TAG, "Methode", "Getting List Data ended with Success")
                     result.data.collect { item ->
-                        _listData.send(item)
+                        // Room emits null once the list is deleted (e.g. swiped away while this screen opened).
+                        if (item == null) navigateBack() else _listData.send(item)
                     }
                 }
 
@@ -209,17 +220,20 @@ class TasksViewModel @Inject constructor(
     }
 
     private fun createTask() {
+        // Take the text before suspending so a double tap can't insert it twice.
+        val message = newTaskMessage.value
+        if (message.isBlank()) return
+        newTaskMessage.value = ""
         viewModelScope.launch {
-            val result =
-                CreateTaskUseCase(taskRepository).execute(Task(list.id, newTaskMessage.value))
+            val result = CreateTaskUseCase(taskRepository).execute(Task(list.id, message))
             when (result) {
                 is Result.Success -> {
                     Logger.d(TAG, "Methode", "Creating Task ended with Success")
-                    newTaskMessage.value = ""
                 }
 
                 is Result.Error -> {
                     Logger.d(TAG, "Methode", "Creating Task ended with Errors")
+                    if (newTaskMessage.value.isEmpty()) newTaskMessage.value = message
                     _errors.send(Error.UnknownError(result.error))
                 }
             }
@@ -277,9 +291,12 @@ class TasksViewModel @Inject constructor(
     }
 
     private fun updateListName() {
+        // Re-checked here: a second tap can pass the command check before the first rename clears the text.
+        val name = newTaskMessage.value.trim()
+        if (name.isEmpty()) return
         viewModelScope.launch {
             val updatedList = list
-            updatedList.name = newTaskMessage.value
+            updatedList.name = name
             newTaskMessage.value = ""
             val result = UpdateListUseCase(listRepository).execute(list)
             _listData.send(updatedList)
@@ -294,35 +311,19 @@ class TasksViewModel @Inject constructor(
 
     private fun changeState(uiState: UiState) {
         viewModelScope.launch {
+            // Leaving Edit drops the prefilled list name; otherwise the next "add" creates a task with it.
+            if (_uiState.value == UiState.Edit && uiState == UiState.Normal) newTaskMessage.value = ""
             _uiState.value = uiState
         }
     }
 
     private fun refreshTasks() {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
+            // No feedList write here: the getTasks subscription re-emits after the reset, and a
+            // separate snapshot could land after (and overwrite) a newer emission.
             val result1 = RefreshTasksUseCase(taskRepository).execute(list.id)
             when (result1) {
-                is Result.Success -> {
-                    val result2 = GetTasksUseCase(taskRepository).execute(list.id)
-                    when (result2) {
-                        is Result.Success -> {
-                            _feedList.value = result2.data.first().toMutableStateList()
-                            withContext(Dispatchers.Main) {
-                                Logger.d(
-                                    TAG,
-                                    "refreshTasks",
-                                    "Refreshing FeedList Succeeded ${_feedList.value}"
-                                )
-                            }
-                        }
-
-                        is Result.Error -> Logger.e(
-                            TAG,
-                            "refreshTasks",
-                            "Refreshing FeedList ended with Errors: ${result2.error}"
-                        )
-                    }
-                }
+                is Result.Success -> Logger.d(TAG, "refreshTasks", "Refreshing Tasks Succeeded")
 
                 is Result.Error -> Logger.e(
                     TAG,
@@ -368,6 +369,7 @@ class TasksViewModel @Inject constructor(
 
     sealed class Error : BaseError() {
         object EmptyNewTask : BaseError()
+        object EmptyListName : BaseError()
         data class UnknownError(val cause: Exception) : BaseError()
     }
 }

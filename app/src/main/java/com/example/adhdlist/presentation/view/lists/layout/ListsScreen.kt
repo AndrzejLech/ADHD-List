@@ -35,7 +35,7 @@ fun ListsScreen(
     viewModel: ListsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
-    val feedListState = viewModel.feedList.collectAsState(initial = mutableListOf())
+    val feedListState = viewModel.feedList.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     Scaffold(

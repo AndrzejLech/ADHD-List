@@ -9,5 +9,5 @@ import javax.inject.Inject
 class GetListUseCase @Inject constructor(
     private val listRepository: ListRepository
 ) {
-    fun execute(listId: Int): Result<Flow<TaskList>, Exception> = listRepository.getList(listId)
+    fun execute(listId: Int): Result<Flow<TaskList?>, Exception> = listRepository.getList(listId)
 }
