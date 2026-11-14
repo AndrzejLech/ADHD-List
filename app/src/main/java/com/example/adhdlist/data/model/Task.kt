@@ -26,5 +26,9 @@ data class Task(
     var position: Int = 0,
     // Firestore document id; set only while the task's list is shared.
     @ColumnInfo(name = "remote_id")
-    var remoteId: String? = null
+    var remoteId: String? = null,
+    // Null: no category, shown at the top of the list. No foreign key (SQLite can't add one to an
+    // existing table), so deleting a category clears this column itself (CategoryDao).
+    @ColumnInfo(name = "category_id")
+    var categoryId: Int? = null
 ) : Serializable

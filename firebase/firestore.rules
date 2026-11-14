@@ -35,21 +35,38 @@ service cloud.firestore {
 
       allow delete: if false;
 
+      function listPath() { return /databases/$(database)/documents/lists/$(listId); }
+      // Writes check the list as it will be after the write: sharing creates the list, its
+      // categories and its items in one batch, and get() would not see the list yet.
+      function listAfter() { return getAfter(listPath()).data; }
+
       match /tasks/{taskId} {
-        function listPath() { return /databases/$(database)/documents/lists/$(listId); }
-        // Writes check the list as it will be after the write: sharing creates the list and its
-        // tasks in one batch, and get() would not see the list yet.
-        function listAfter() { return getAfter(listPath()).data; }
         function validTask() {
-          return request.resource.data.keys().hasOnly(['message', 'state', 'position'])
-            && request.resource.data.message is string
-            && request.resource.data.message.size() <= 1000
-            && request.resource.data.state is bool
-            && request.resource.data.position is int;
+          let data = request.resource.data;
+          return data.keys().hasOnly(['message', 'state', 'position', 'category'])
+            && data.message is string
+            && data.message.size() <= 1000
+            && data.state is bool
+            && data.position is int
+            // optional: the id of one of this list's categories; absent means "no category"
+            && (!('category' in data) || data.category is string);
         }
         allow read: if isMember(get(listPath()).data);
         allow delete: if isMember(listAfter());
         allow create, update: if isMember(listAfter()) && validTask();
+      }
+
+      match /categories/{categoryId} {
+        function validCategory() {
+          let data = request.resource.data;
+          return data.keys().hasOnly(['name', 'position'])
+            && data.name is string
+            && data.name.size() <= 200
+            && data.position is int;
+        }
+        allow read: if isMember(get(listPath()).data);
+        allow delete: if isMember(listAfter());
+        allow create, update: if isMember(listAfter()) && validCategory();
       }
     }
   }

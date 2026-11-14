@@ -1,7 +1,9 @@
 package com.example.adhdlist.data.sync
 
+import com.example.adhdlist.data.model.Category
 import com.example.adhdlist.data.model.Task
 import com.example.adhdlist.data.model.TaskList
+import com.example.adhdlist.data.remote.SharedListsRemote.RemoteCategory
 import com.example.adhdlist.data.remote.SharedListsRemote.RemoteList
 import com.example.adhdlist.data.remote.SharedListsRemote.RemoteTask
 
@@ -26,19 +28,51 @@ fun planListMirror(localShared: List<TaskList>, remotes: List<RemoteList>, seen:
     )
 }
 
+data class CategoryMirrorPlan(val insert: List<Category>, val update: List<Category>, val delete: List<Category>)
+
+/** Like [planTaskMirror]; the local open/closed state is kept, since it is never synced. */
+fun planCategoryMirror(listId: Int, locals: List<Category>, remotes: List<RemoteCategory>): CategoryMirrorPlan {
+    val localByRemoteId = locals.filter { it.remoteId != null }.associateBy { it.remoteId }
+    val remoteIds = remotes.mapTo(HashSet()) { it.id }
+    val insert = mutableListOf<Category>()
+    val update = mutableListOf<Category>()
+    for (remote in remotes) {
+        val local = localByRemoteId[remote.id]
+        when {
+            local == null -> insert += Category(listId, remote.name, position = remote.position, remoteId = remote.id)
+            local.name != remote.name || local.position != remote.position ->
+                update += local.copy(name = remote.name, position = remote.position)
+        }
+    }
+    return CategoryMirrorPlan(insert, update, locals.filter { it.remoteId != null && it.remoteId !in remoteIds })
+}
+
 data class TaskMirrorPlan(val insert: List<Task>, val update: List<Task>, val delete: List<Task>)
 
-fun planTaskMirror(listId: Int, locals: List<Task>, remotes: List<RemoteTask>): TaskMirrorPlan {
+/** [categoryIds] maps a category's remote id to its local id; unknown ones fall back to "no category". */
+fun planTaskMirror(
+    listId: Int,
+    locals: List<Task>,
+    remotes: List<RemoteTask>,
+    categoryIds: Map<String, Int> = emptyMap()
+): TaskMirrorPlan {
     val localByRemoteId = locals.filter { it.remoteId != null }.associateBy { it.remoteId }
     val remoteIds = remotes.mapTo(HashSet()) { it.id }
     val insert = mutableListOf<Task>()
     val update = mutableListOf<Task>()
     for (remote in remotes) {
         val local = localByRemoteId[remote.id]
-        val row = Task(listId, remote.message, remote.state, id = local?.id ?: 0, position = remote.position, remoteId = remote.id)
+        val row = Task(
+            listId, remote.message, remote.state,
+            id = local?.id ?: 0,
+            position = remote.position,
+            remoteId = remote.id,
+            categoryId = remote.category?.let { categoryIds[it] }
+        )
         when {
             local == null -> insert += row
-            local.message != row.message || local.state != row.state || local.position != row.position -> update += row
+            local.message != row.message || local.state != row.state || local.position != row.position ||
+                local.categoryId != row.categoryId -> update += row
         }
     }
     return TaskMirrorPlan(insert, update, locals.filter { it.remoteId != null && it.remoteId !in remoteIds })

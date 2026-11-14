@@ -10,6 +10,7 @@ The app focuses on simplicity and efficiency, making it easy to organise and foc
 - Scalable and maintainable code base using clean architecture principles.
 - Shared lists: invite people with a code or link and edit the same list together (Firebase, works offline).
 - Lists for anything (to do, to buy, to pack, to remember); items can have several lines.
+- Categories inside a list, like an accordion (Zakupy → Warzywa → Cukinia): tap a category to open or close it, + on it to add there; open/closed is remembered on the phone.
 - Press and hold an item to edit its text, or a list to rename it; drag the ═ handle to change the order.
 - Deleting by swipe needs a long, deliberate swipe (most of the row); a short or quick swipe does nothing.
 - Designed for AuDHD: the original ADHD List look (yellow top bar and accents on neutral greys) in light and dark mode, the same layout every time, a progress bar

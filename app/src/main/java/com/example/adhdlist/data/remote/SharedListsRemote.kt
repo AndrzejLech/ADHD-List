@@ -26,7 +26,15 @@ import kotlinx.coroutines.withTimeout
 class SharedListsRemote(context: Context) {
     /** [confirmed]: the server has the list, not just this device's cache (true for lists created elsewhere). */
     data class RemoteList(val id: String, val name: String, val confirmed: Boolean = true)
-    data class RemoteTask(val id: String, val message: String, val state: Boolean, val position: Int)
+    /** [category]: the category's document id, or null for "no category". */
+    data class RemoteTask(
+        val id: String,
+        val message: String,
+        val state: Boolean,
+        val position: Int,
+        val category: String? = null
+    )
+    data class RemoteCategory(val id: String, val name: String, val position: Int)
 
     private val app: FirebaseApp? = initFirebase(context)
     val isAvailable: Boolean get() = app != null
@@ -36,6 +44,7 @@ class SharedListsRemote(context: Context) {
 
     private fun listRef(listId: String) = db.collection(LISTS).document(listId)
     private fun tasksRef(listId: String) = listRef(listId).collection(TASKS)
+    private fun categoriesRef(listId: String) = listRef(listId).collection(CATEGORIES)
 
     /** Emits the signed-in user id, or null before the first share/join on this install. */
     fun userId(): Flow<String?> = callbackFlow {
@@ -75,8 +84,22 @@ class SharedListsRemote(context: Context) {
                     id = it.id,
                     message = it.getString(MESSAGE).orEmpty(),
                     state = it.getBoolean(STATE) ?: false,
-                    position = it.getLong(POSITION)?.toInt() ?: 0
+                    position = it.getLong(POSITION)?.toInt() ?: 0,
+                    category = it.getString(CATEGORY)
                 )
+            })
+        }
+        awaitClose { registration.remove() }
+    }
+
+    fun categories(listId: String): Flow<List<RemoteCategory>> = callbackFlow {
+        val registration = categoriesRef(listId).addSnapshotListener { snapshot, error ->
+            if (error != null) {
+                close(error)
+                return@addSnapshotListener
+            }
+            trySend(snapshot!!.documents.map {
+                RemoteCategory(it.id, it.getString(NAME).orEmpty(), it.getLong(POSITION)?.toInt() ?: 0)
             })
         }
         awaitClose { registration.remove() }
@@ -84,14 +107,22 @@ class SharedListsRemote(context: Context) {
 
     fun newListId(): String = db.collection(LISTS).document().id
     fun newTaskId(listId: String): String = tasksRef(listId).document().id
+    fun newCategoryId(listId: String): String = categoriesRef(listId).document().id
 
     /**
      * Uploads a list and its tasks (ids chosen by the caller) in one batch. Awaited, unlike other
      * writes: if the server refuses it, the caller must turn the list back into a local one.
      */
-    suspend fun createList(uid: String, listId: String, name: String, tasks: List<RemoteTask>) {
+    suspend fun createList(
+        uid: String,
+        listId: String,
+        name: String,
+        tasks: List<RemoteTask>,
+        categories: List<RemoteCategory> = emptyList()
+    ) {
         val batch = db.batch()
         batch.set(listRef(listId), mapOf(NAME to name, MEMBERS to listOf(uid)))
+        categories.forEach { batch.set(categoriesRef(listId).document(it.id), it.toMap()) }
         tasks.forEach { batch.set(tasksRef(listId).document(it.id), it.toMap()) }
         withTimeout(TIMEOUT_MS) { batch.commit().await() }
     }
@@ -113,8 +144,21 @@ class SharedListsRemote(context: Context) {
         tasksRef(listId).document(task.id).set(task.toMap()).logFailure("setTask")
     }
 
-    fun setMessage(listId: String, taskId: String, message: String) {
-        tasksRef(listId).document(taskId).update(MESSAGE, message).logFailure("setMessage")
+    /** New text and category for an item; other fields (someone's tick) are left alone. */
+    fun setMessageAndCategory(listId: String, taskId: String, message: String, category: String?) {
+        tasksRef(listId).document(taskId)
+            .update(mapOf(MESSAGE to message, CATEGORY to (category ?: FieldValue.delete())))
+            .logFailure("setMessageAndCategory")
+    }
+
+    fun setCategory(listId: String, category: RemoteCategory) {
+        categoriesRef(listId).document(category.id).set(category.toMap()).logFailure("setCategory")
+    }
+
+    /** Deletes the category; its items move to "no category" in the same batch, so none are lost. */
+    fun deleteCategory(listId: String, categoryId: String, itemIds: List<String>) = batch("deleteCategory") { batch ->
+        batch.delete(categoriesRef(listId).document(categoryId))
+        itemIds.forEach { batch.update(tasksRef(listId).document(it), CATEGORY, FieldValue.delete()) }
     }
 
     fun setState(listId: String, taskId: String, state: Boolean) {
@@ -129,12 +173,17 @@ class SharedListsRemote(context: Context) {
         taskIds.forEach { batch.update(tasksRef(listId).document(it), STATE, state) }
     }
 
-    fun deleteAll(listId: String, taskIds: List<String>) = batch("deleteAll") { batch ->
+    fun deleteAll(listId: String, taskIds: List<String>, categoryIds: List<String>) = batch("deleteAll") { batch ->
         taskIds.forEach { batch.delete(tasksRef(listId).document(it)) }
+        categoryIds.forEach { batch.delete(categoriesRef(listId).document(it)) }
     }
 
-    fun setPositions(listId: String, positions: Map<String, Int>) = batch("setPositions") { batch ->
-        positions.forEach { (taskId, position) -> batch.update(tasksRef(listId).document(taskId), POSITION, position) }
+    /** After a drag: each item's position and category (null: no category), in one batch. */
+    fun setOrder(listId: String, order: Map<String, Pair<Int, String?>>) = batch("setOrder") { batch ->
+        order.forEach { (taskId, place) ->
+            val (position, category) = place
+            batch.update(tasksRef(listId).document(taskId), mapOf(POSITION to position, CATEGORY to (category ?: FieldValue.delete())))
+        }
     }
 
     private fun batch(name: String, fill: (com.google.firebase.firestore.WriteBatch) -> Unit) {
@@ -145,12 +194,19 @@ class SharedListsRemote(context: Context) {
         addOnFailureListener { Log.e(TAG, name, it) }
     }
 
-    private fun RemoteTask.toMap() = mapOf(MESSAGE to message, STATE to state, POSITION to position)
+    // The category key is only written when set: rules published before categories existed accept
+    // items without it, so uncategorized items keep syncing until the new rules are published.
+    private fun RemoteTask.toMap() =
+        mapOf(MESSAGE to message, STATE to state, POSITION to position) + listOfNotNull(category?.let { CATEGORY to it })
+
+    private fun RemoteCategory.toMap() = mapOf(NAME to name, POSITION to position)
 
     companion object {
         private const val TAG = "SharedListsRemote"
         private const val LISTS = "lists"
         private const val TASKS = "tasks"
+        private const val CATEGORIES = "categories"
+        private const val CATEGORY = "category"
         private const val NAME = "name"
         private const val MEMBERS = "members"
         private const val MESSAGE = "message"

@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.room.withTransaction
 import com.example.adhdlist.data.model.TaskList
 import com.example.adhdlist.data.remote.SharedListsRemote
+import com.example.adhdlist.data.remote.SharedListsRemote.RemoteCategory
 import com.example.adhdlist.data.remote.SharedListsRemote.RemoteList
 import com.example.adhdlist.data.remote.SharedListsRemote.RemoteTask
 import com.example.adhdlist.data.room.TaskDatabase
@@ -13,8 +14,10 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
@@ -28,6 +31,7 @@ class SharedListsSync(context: Context, private val remote: SharedListsRemote) {
     private val database = TaskDatabase.getInstance(context)
     private val listDao = database.listDao()
     private val taskDao = database.taskDao()
+    private val categoryDao = database.categoryDao()
     private val seen = HashSet<String>()
     private val taskJobs = HashMap<String, Job>()
 
@@ -48,7 +52,7 @@ class SharedListsSync(context: Context, private val remote: SharedListsRemote) {
         if (!remote.isAvailable) return
         scope.launch {
             remote.userId()
-                .flatMapLatest { uid -> if (uid == null) emptyFlow() else remote.myLists(uid).retryAfterError("myLists") }
+                .flatMapLatest { uid -> if (uid == null) emptyFlow() else remote.myLists(uid).retryAfterError("myLists", RETRY_MS) }
                 .collect { lists -> mirrorLists(scope, lists.filter { it.id !in left }) }
         }
     }
@@ -71,21 +75,32 @@ class SharedListsSync(context: Context, private val remote: SharedListsRemote) {
         // Only once the server has the list: before that, its rules reject reading the tasks.
         remotes.filter { it.confirmed && it.id !in taskJobs }.forEach { list ->
             taskJobs[list.id] = scope.launch {
-                remote.tasks(list.id).retryAfterError("tasks").collect { mirrorTasks(list.id, it) }
+                listContent(remote.categories(list.id), remote.tasks(list.id))
+                    .collect { (categories, tasks) -> mirrorListContent(list.id, categories, tasks) }
             }
         }
     }
 
-    private fun <T> Flow<T>.retryAfterError(name: String) = retryWhen { cause, _ ->
-        Log.w(TAG, "$name listener failed, retrying", cause)
-        delay(RETRY_MS)
-        true
-    }
-
-    private suspend fun mirrorTasks(remoteListId: String, remotes: List<RemoteTask>) {
+    private suspend fun mirrorListContent(
+        remoteListId: String,
+        remoteCategories: List<RemoteCategory>?,
+        remoteTasks: List<RemoteTask>
+    ) {
         database.withTransaction {
             val list = listDao.getByRemoteId(remoteListId) ?: return@withTransaction
-            val plan = planTaskMirror(list.id, taskDao.getTasksOnce(list.id), remotes)
+            // null: categories couldn't be read; keep the local ones as they are.
+            if (remoteCategories != null) {
+                val categoryPlan = planCategoryMirror(list.id, categoryDao.getForListOnce(list.id), remoteCategories)
+                categoryPlan.insert.forEach { categoryDao.insert(it) }
+                if (categoryPlan.update.isNotEmpty()) categoryDao.update(categoryPlan.update)
+                categoryPlan.delete.forEach {
+                    categoryDao.releaseItems(it.id)
+                    categoryDao.delete(it)
+                }
+            }
+            val categoryIds = categoryDao.getForListOnce(list.id)
+                .mapNotNull { category -> category.remoteId?.let { it to category.id } }.toMap()
+            val plan = planTaskMirror(list.id, taskDao.getTasksOnce(list.id), remoteTasks, categoryIds)
             plan.insert.forEach { taskDao.insert(it) }
             if (plan.update.isNotEmpty()) taskDao.update(plan.update)
             if (plan.delete.isNotEmpty()) taskDao.delete(plan.delete)
@@ -93,7 +108,35 @@ class SharedListsSync(context: Context, private val remote: SharedListsRemote) {
     }
 
     private companion object {
-        const val TAG = "SharedListsSync"
         const val RETRY_MS = 5_000L
     }
 }
+
+/** Restarts a listener after an error (Firestore stops a listener for good once it fails). */
+internal fun <T> Flow<T>.retryAfterError(name: String, delayMs: Long) = retryWhen { cause, _ ->
+    Log.w("SharedListsSync", "$name listener failed, retrying", cause)
+    delay(delayMs)
+    true
+}
+
+/**
+ * A shared list's categories and items, mirrored together, so normally an item is never mirrored
+ * before its category exists. Categories are optional, though: if their listener fails (for
+ * example security rules published before categories existed), this emits null for them and the
+ * items keep syncing instead of waiting forever.
+ */
+internal fun listContent(
+    categories: Flow<List<RemoteCategory>>,
+    tasks: Flow<List<RemoteTask>>,
+    retryMs: Long = 5_000L
+): Flow<Pair<List<RemoteCategory>?, List<RemoteTask>>> = combine(
+    categories
+        .map<List<RemoteCategory>, List<RemoteCategory>?> { it }
+        .retryWhen { cause, _ ->
+            Log.w("SharedListsSync", "categories listener failed, items sync without them; retrying", cause)
+            emit(null)
+            delay(retryMs)
+            true
+        },
+    tasks.retryAfterError("tasks", retryMs)
+) { c, t -> c to t }

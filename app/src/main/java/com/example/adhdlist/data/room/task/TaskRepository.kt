@@ -2,6 +2,7 @@ package com.example.adhdlist.data.room.task
 
 import android.content.Context
 import androidx.annotation.WorkerThread
+import androidx.room.withTransaction
 import com.example.adhdlist.data.model.Task
 import com.example.adhdlist.data.remote.SharedListsRemote
 import com.example.adhdlist.data.remote.SharedListsRemote.RemoteTask
@@ -18,9 +19,11 @@ class TaskRepository(context: Context, private val remote: SharedListsRemote) {
     private val taskDatabase = TaskDatabase.getInstance(context)
     private val taskDao = taskDatabase.taskDao()
     private val listDao = taskDatabase.listDao()
+    private val categoryDao = taskDatabase.categoryDao()
     private var taskList: Flow<MutableList<Task>> = emptyFlow()
 
     private suspend fun remoteListId(listId: Int) = listDao.getListOnce(listId)?.remoteId
+    private suspend fun remoteCategoryId(categoryId: Int?) = categoryId?.let { categoryDao.getOnce(it)?.remoteId }
 
     @WorkerThread
     fun getTasks(id: Int): Result<Flow<MutableList<Task>>, Exception> {
@@ -37,7 +40,10 @@ class TaskRepository(context: Context, private val remote: SharedListsRemote) {
             task.position = taskDao.nextPosition(task.listId)
             val listRemoteId = remoteListId(task.listId)
             if (listRemoteId == null) taskDao.insert(task)
-            else remote.setTask(listRemoteId, RemoteTask(remote.newTaskId(listRemoteId), task.message, task.state, task.position))
+            else remote.setTask(
+                listRemoteId,
+                RemoteTask(remote.newTaskId(listRemoteId), task.message, task.state, task.position, remoteCategoryId(task.categoryId))
+            )
             Result.Success(true)
         } catch (e: Exception) {
             Result.Error(e)
@@ -50,7 +56,10 @@ class TaskRepository(context: Context, private val remote: SharedListsRemote) {
             val listRemoteId = remoteListId(task.listId)
             val taskRemoteId = task.remoteId
             if (listRemoteId == null || taskRemoteId == null) taskDao.insert(task)
-            else remote.setTask(listRemoteId, RemoteTask(taskRemoteId, task.message, task.state, task.position))
+            else remote.setTask(
+                listRemoteId,
+                RemoteTask(taskRemoteId, task.message, task.state, task.position, remoteCategoryId(task.categoryId))
+            )
             Result.Success(true)
         } catch (e: Exception) {
             Result.Error(e)
@@ -69,13 +78,13 @@ class TaskRepository(context: Context, private val remote: SharedListsRemote) {
         }
     }
 
-    /** New text for an item; only that field is sent, so a check made elsewhere at the same time survives. */
+    /** New text and/or category for an item; only those fields are sent, so a tick made elsewhere survives. */
     suspend fun editTask(task: Task): Result<Boolean, Exception> {
         return try {
             val listRemoteId = remoteListId(task.listId)
             val taskRemoteId = task.remoteId
             if (listRemoteId == null || taskRemoteId == null) taskDao.update(task)
-            else remote.setMessage(listRemoteId, taskRemoteId, task.message)
+            else remote.setMessageAndCategory(listRemoteId, taskRemoteId, task.message, remoteCategoryId(task.categoryId))
             Result.Success(true)
         } catch (e: Exception) {
             Result.Error(e)
@@ -95,13 +104,21 @@ class TaskRepository(context: Context, private val remote: SharedListsRemote) {
         }
     }
 
-    /** [ordered] is the whole list in its new order. Room is written too so the drop shows at once. */
+    /**
+     * [ordered] is the whole list in its new order, with each item's (possibly new) category after a
+     * drag. Room is written too so the drop shows at once.
+     */
     suspend fun reorderTasks(listId: Int, ordered: List<Task>): Result<Boolean, Exception> {
         return try {
             ordered.forEachIndexed { index, task -> task.position = index }
             taskDao.update(ordered)
             remoteListId(listId)?.let { listRemoteId ->
-                remote.setPositions(listRemoteId, ordered.filter { it.remoteId != null }.associate { it.remoteId!! to it.position })
+                val categoryRemoteIds = categoryDao.getForListOnce(listId).associate { it.id to it.remoteId }
+                remote.setOrder(
+                    listRemoteId,
+                    ordered.filter { it.remoteId != null }
+                        .associate { it.remoteId!! to (it.position to categoryRemoteIds[it.categoryId]) }
+                )
             }
             Result.Success(true)
         } catch (e: Exception) {
@@ -124,8 +141,16 @@ class TaskRepository(context: Context, private val remote: SharedListsRemote) {
     suspend fun clearAllTasksFromList(listId: Int): Result<Boolean, Exception> {
         return try {
             val listRemoteId = remoteListId(listId)
-            if (listRemoteId == null) taskDao.clearAllTaskFromList(listId)
-            else remote.deleteAll(listRemoteId, taskDao.getTasksOnce(listId).mapNotNull { it.remoteId })
+            // "Delete everything": the list's items and its categories.
+            if (listRemoteId == null) taskDatabase.withTransaction {
+                taskDao.clearAllTaskFromList(listId)
+                categoryDao.delete(categoryDao.getForListOnce(listId))
+            }
+            else remote.deleteAll(
+                listRemoteId,
+                taskDao.getTasksOnce(listId).mapNotNull { it.remoteId },
+                categoryDao.getForListOnce(listId).mapNotNull { it.remoteId }
+            )
             Result.Success(true)
         } catch (e: Exception) {
             Result.Error(e)

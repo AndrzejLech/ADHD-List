@@ -50,8 +50,13 @@ fun TaskRow(
         checked = value
         onCheckedChange(value)
     }
+    // Material can confirm the same finished swipe twice; delete (and offer Undo) only once.
+    var deleted by remember { mutableStateOf(false) }
     val dismissState = rememberDeliberateSwipeState {
-        onDelete()
+        if (!deleted) {
+            deleted = true
+            onDelete()
+        }
         true
     }
     SwipeToDismissBox(

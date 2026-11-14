@@ -15,10 +15,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.Edit
@@ -58,6 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.adhdlist.MainActivity
+import com.example.adhdlist.data.model.Category
 import com.example.adhdlist.data.model.Task
 import com.example.adhdlist.data.model.TaskList
 import com.example.adhdlist.presentation.common.AddTextField
@@ -71,6 +74,7 @@ import com.example.adhdlist.ui.theme.yellowTopBarColors
 import com.example.adhdlist.presentation.view.tasks.viewmodel.TasksViewModel.Command
 import kotlinx.coroutines.launch
 import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.ReorderableLazyListState
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -89,6 +93,10 @@ fun TasksScreen(
     val scope = rememberCoroutineScope()
     var renaming by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Task?>(null) }
+    var editingCategory by remember { mutableStateOf<Category?>(null) }
+    var deletingCategory by remember { mutableStateOf<Category?>(null) }
+    var creatingCategory by remember { mutableStateOf(false) }
+    val categories by viewModel.categories.collectAsState()
     var confirmClear by remember { mutableStateOf(false) }
     var confirmUncheck by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -145,6 +153,14 @@ fun TasksScreen(
                             Icon(Icons.Outlined.MoreVert, contentDescription = "More options")
                         }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("New category") },
+                                leadingIcon = { Icon(Icons.Outlined.CreateNewFolder, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    creatingCategory = true
+                                }
+                            )
                             // One entry that flips: "Uncheck all" while anything is ticked (asks first,
                             // it throws away progress), "Check all" once nothing is.
                             if (feedList.any { it.state }) {
@@ -166,7 +182,9 @@ fun TasksScreen(
                                     }
                                 )
                             }
+                            // Greyed out rather than hidden, so the menu looks the same every time.
                             DropdownMenuItem(
+                                enabled = feedList.isNotEmpty() || categories.isNotEmpty(),
                                 text = { Text("Delete everything") },
                                 leadingIcon = { Icon(Icons.Outlined.DeleteSweep, contentDescription = null) },
                                 onClick = {
@@ -180,6 +198,7 @@ fun TasksScreen(
             )
         },
         bottomBar = {
+            val addTarget = categories.firstOrNull { it.id == viewModel.addTargetId.value }
             AddTextField(
                 modifier = Modifier
                     .testTag("TasksTextField")
@@ -187,13 +206,15 @@ fun TasksScreen(
                 value = viewModel.newTaskMessage.value,
                 onTextChanged = { viewModel.newTaskMessage.value = it },
                 onAddButtonClick = { viewModel.triggerCommand(Command.AddButtonClick) },
-                placeholder = "Add something",
-                multiLine = true
+                placeholder = addTarget?.let { "Add to ${it.name}" } ?: "Add something",
+                multiLine = true,
+                target = addTarget?.name,
+                onClearTarget = { viewModel.triggerCommand(Command.AddTo(null)) }
             )
         }
     ) { innerPadding ->
         Column(Modifier.padding(innerPadding).fillMaxSize()) {
-            if (feedList.isEmpty()) {
+            if (feedList.isEmpty() && categories.isEmpty()) {
                 EmptyState(
                     icon = Icons.Outlined.TaskAlt,
                     title = "Nothing here yet",
@@ -201,19 +222,66 @@ fun TasksScreen(
                 )
             } else {
                 val done = feedList.count { it.state }
-                Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
-                    Text(
-                        if (done == feedList.size) "All ticked. Nice work." else progressText(done, feedList.size),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    ProgressBar(done, feedList.size)
+                if (feedList.isNotEmpty()) {
+                    Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+                        Text(
+                            if (done == feedList.size) "All ticked. Nice work." else progressText(done, feedList.size),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        ProgressBar(done, feedList.size)
+                    }
                 }
                 val lazyListState = rememberLazyListState()
-                val reorderState = rememberReorderableLazyListState(lazyListState) { from, to ->
-                    viewModel.moveTask(from.index, to.index)
+                // Built here, from one read of the items and categories, not inside LazyColumn's
+                // builder: that runs later and would see newer data than topItems, so a just-moved
+                // item showed twice (at the top and in its category) and crashed the list.
+                val categoryIds = categories.mapTo(HashSet()) { it.id }
+                val topItems = feedList.filter { it.categoryId == null || it.categoryId !in categoryIds }
+                val rows = buildList {
+                    topItems.forEach { add(ListRow.Item(it)) }
+                    categories.forEach { category ->
+                        val inCategory = feedList.filter { it.categoryId == category.id }
+                        add(ListRow.Header(category, inCategory.count { it.state }, inCategory.size))
+                        if (category.expanded) inCategory.forEach { add(ListRow.Item(it)) }
+                    }
                 }
+                // Keys are "item-<id>" and "category-<id>"; LazyColumn indices are indices into rows.
+                // Headers never move, but dragging an item across one moves it into that section.
+                val reorderState = rememberReorderableLazyListState(lazyListState) { from, to ->
+                    val fromId = itemId(from.key) ?: return@rememberReorderableLazyListState
+                    val toId = itemId(to.key)
+                    val header = rows.getOrNull(to.index) as? ListRow.Header
+                    when {
+                        toId != null -> viewModel.moveTask(fromId, toId)
+                        header == null -> Unit
+                        // Down past a header: first item of that category.
+                        to.index > from.index -> viewModel.moveTaskToSection(fromId, header.category.id, first = true)
+                        // Up past its own header: last item of the section above.
+                        else -> viewModel.moveTaskToSection(fromId, sectionAbove(rows, to.index), first = false)
+                    }
+                }
+                // Position among the items shown, for the "TaskListElement$n" test tags.
+                val rowIndex = rows.filterIsInstance<ListRow.Item>().withIndex().associate { (i, row) -> row.task.id to i }
+
+                val onDelete: (Task) -> Unit = { task ->
+                    viewModel.triggerCommand(Command.SwipeTaskDelete(task))
+                    scope.launch {
+                        snackbarHostState.currentSnackbarData?.dismiss()
+                        val result = snackbarHostState.showSnackbar(
+                            "Deleted “${task.message}”",
+                            actionLabel = "Undo",
+                            duration = SnackbarDuration.Long
+                        )
+                        if (result == SnackbarResult.ActionPerformed) {
+                            viewModel.triggerCommand(Command.RestoreTask(task))
+                        }
+                    }
+                }
+                val onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) }
+                val onDragStopped = { viewModel.triggerCommand(Command.SaveOrder) }
+
                 LazyColumn(
                     state = lazyListState,
                     modifier = Modifier
@@ -222,33 +290,23 @@ fun TasksScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    itemsIndexed(feedList, key = { _, task -> task.id }) { index, task ->
-                        ReorderableItem(reorderState, key = task.id) { isDragging ->
-                            TaskRow(
-                                index = index,
-                                task = task,
-                                isDragging = isDragging,
-                                onCheckedChange = { viewModel.triggerCommand(Command.ChangeState(task, it)) },
-                                onEdit = { editing = task },
-                                onDelete = {
-                                    viewModel.triggerCommand(Command.SwipeTaskDelete(task))
-                                    scope.launch {
-                                        snackbarHostState.currentSnackbarData?.dismiss()
-                                        val result = snackbarHostState.showSnackbar(
-                                            "Deleted “${task.message}”",
-                                            actionLabel = "Undo",
-                                            duration = SnackbarDuration.Long
-                                        )
-                                        if (result == SnackbarResult.ActionPerformed) {
-                                            viewModel.triggerCommand(Command.RestoreTask(task))
-                                        }
-                                    }
-                                },
-                                handleModifier = Modifier.draggableHandle(
-                                    onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
-                                    onDragStopped = { viewModel.triggerCommand(Command.SaveOrder) }
-                                )
+                    items(rows, key = { it.key }, contentType = { it::class }) { row ->
+                        when (row) {
+                            is ListRow.Item -> ReorderableTaskRow(
+                                reorderState, rowIndex[row.task.id] ?: 0, row.task, viewModel,
+                                { editing = it }, onDelete, onDragStarted, onDragStopped
                             )
+                            is ListRow.Header -> ReorderableItem(reorderState, key = row.key, enabled = false) {
+                                CategoryHeader(
+                                    category = row.category,
+                                    ticked = row.ticked,
+                                    total = row.total,
+                                    isAddTarget = viewModel.addTargetId.value == row.category.id,
+                                    onToggle = { viewModel.triggerCommand(Command.ToggleCategory(row.category)) },
+                                    onAddHere = { viewModel.triggerCommand(Command.AddTo(row.category)) },
+                                    onEdit = { editingCategory = row.category }
+                                )
+                            }
                         }
                     }
                 }
@@ -270,17 +328,68 @@ fun TasksScreen(
         )
     }
     editing?.let { task ->
+        var categoryId by remember(task.id) { mutableStateOf(task.categoryId) }
         TextInputDialog(
             title = "Edit",
             initial = task.message,
             label = "Item",
             confirmLabel = "Save",
             onConfirm = {
-                viewModel.triggerCommand(Command.EditItem(task, it))
+                viewModel.triggerCommand(Command.EditItem(task, it, categoryId))
                 editing = null
             },
             onDismiss = { editing = null },
-            multiLine = true
+            multiLine = true,
+            extraContent = if (categories.isEmpty()) null else {
+                { CategoryChooser(categories, categoryId) { categoryId = it } }
+            }
+        )
+    }
+    if (creatingCategory) {
+        TextInputDialog(
+            title = "New category",
+            initial = "",
+            label = "Category name",
+            confirmLabel = "Add",
+            onConfirm = {
+                viewModel.triggerCommand(Command.NewCategory(it))
+                creatingCategory = false
+            },
+            onDismiss = { creatingCategory = false }
+        )
+    }
+    editingCategory?.let { category ->
+        TextInputDialog(
+            title = "Category",
+            initial = category.name,
+            label = "Category name",
+            confirmLabel = "Save",
+            onConfirm = {
+                viewModel.triggerCommand(Command.RenameCategory(category, it))
+                editingCategory = null
+            },
+            onDismiss = { editingCategory = null },
+            extraAction = "Delete" to {
+                editingCategory = null
+                deletingCategory = category
+            }
+        )
+    }
+    deletingCategory?.let { category ->
+        val count = feedList.count { it.categoryId == category.id }
+        ConfirmDialog(
+            title = "Delete “${category.name}”?",
+            text = when (count) {
+                0 -> "The category is empty."
+                1 -> "Its item stays and moves to the top of the list."
+                else -> "Its $count items stay and move to the top of the list."
+            },
+            confirmLabel = "Delete category",
+            onConfirm = {
+                viewModel.triggerCommand(Command.DeleteCategory(category))
+                deletingCategory = null
+            },
+            onDismiss = { deletingCategory = null }
         )
     }
     if (confirmUncheck) {
@@ -317,6 +426,9 @@ fun TasksScreen(
     LaunchedEffect(key1 = viewModel.listData) {
         viewModel.getListData(list.id)
     }
+    LaunchedEffect(key1 = viewModel.categories) {
+        viewModel.getCategories(list.id)
+    }
     LaunchedEffect(key1 = viewModel.actions) {
         viewModel.actions.collect { action ->
             viewModel.handleAction(action)
@@ -343,3 +455,52 @@ fun TasksScreen(
         }
     }
 }
+
+@Composable
+private fun LazyItemScope.ReorderableTaskRow(
+    reorderState: ReorderableLazyListState,
+    index: Int,
+    task: Task,
+    viewModel: TasksViewModel,
+    onEdit: (Task) -> Unit,
+    onDelete: (Task) -> Unit,
+    onDragStarted: () -> Unit,
+    onDragStopped: () -> Unit,
+) {
+    ReorderableItem(reorderState, key = ListRow.Item(task).key) { isDragging ->
+        TaskRow(
+            index = index,
+            task = task,
+            isDragging = isDragging,
+            onCheckedChange = { viewModel.triggerCommand(Command.ChangeState(task, it)) },
+            onEdit = { onEdit(task) },
+            onDelete = { onDelete(task) },
+            handleModifier = Modifier.draggableHandle(
+                onDragStarted = { onDragStarted() },
+                onDragStopped = { onDragStopped() }
+            )
+        )
+    }
+}
+
+private sealed interface ListRow {
+    val key: String
+
+    data class Item(val task: Task) : ListRow {
+        override val key get() = "item-${task.id}"
+    }
+
+    data class Header(val category: Category, val ticked: Int, val total: Int) : ListRow {
+        override val key get() = "category-${category.id}"
+    }
+}
+
+private fun itemId(key: Any?) = (key as? String)?.removePrefix("item-")?.takeIf { it != key }?.toIntOrNull()
+
+/** The category of the section that ends just above row [index]: the nearest header or item above it (null: the top). */
+private fun sectionAbove(rows: List<ListRow>, index: Int): Int? =
+    when (val row = rows.getOrNull(index - 1)) {
+        is ListRow.Header -> row.category.id
+        is ListRow.Item -> row.task.categoryId
+        null -> null
+    }

@@ -3,6 +3,7 @@ package com.example.adhdlist.tests
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -19,6 +20,9 @@ import androidx.test.espresso.Espresso
 import com.example.adhdlist.BaseUiTest
 import com.example.adhdlist.utils.waitOnComponent
 import dagger.hilt.android.testing.HiltAndroidTest
+import androidx.compose.ui.test.filterToOne
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.longClick
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -188,6 +192,110 @@ class StateMachineRegressionTest : BaseUiTest() {
         composeTestRule.onNodeWithTag("DialogTextField").performTextInput("\nX10 +1")
         composeTestRule.onNodeWithText("Save").performClick()
         composeTestRule.waitUntil(5_000) { taskTexts() == listOf("$sets\nX10 +1") }
+    }
+
+    private fun inDialog(text: String) =
+        composeTestRule.onAllNodesWithText(text).filterToOne(hasAnyAncestor(isDialog()))
+
+    @Test
+    fun categoriesGroupItemsFoldAndKeepTheirItemsWhenDeleted() {
+        openNewList("Zakupy")
+        addTask("chleb")
+
+        // New category from the menu.
+        composeTestRule.onNodeWithContentDescription("More options").performClick()
+        composeTestRule.onNodeWithText("New category").performClick()
+        composeTestRule.onNodeWithTag("DialogTextField").performTextInput("Warzywa")
+        inDialog("Add").performClick()
+        composeTestRule.waitUntil(5_000) { textShown("Warzywa") }
+
+        // + on the header: the field says where items go, and they land in the category.
+        composeTestRule.onNodeWithContentDescription("Add to Warzywa").performClick()
+        composeTestRule.onNodeWithTag("AddTarget").assertExists()
+        addTask("cukinia")
+        assertEquals(listOf("chleb", "cukinia"), taskTexts())
+
+        // Tap the header to close it; the item inside is hidden, the one at the top isn't.
+        composeTestRule.onNodeWithText("Warzywa").performClick()
+        composeTestRule.waitUntil(5_000) { taskTexts() == listOf("chleb") }
+
+        // Closed stays closed after leaving and coming back.
+        composeTestRule.onNodeWithContentDescription("Back").performClick()
+        composeTestRule.waitUntil(5_000) { textShown("ADHD List") }
+        composeTestRule.onNodeWithText("Zakupy").performClick()
+        composeTestRule.waitUntil(5_000) { textShown("Warzywa") }
+        assertEquals(listOf("chleb"), taskTexts())
+        composeTestRule.onNodeWithText("Warzywa").performClick()
+        composeTestRule.waitUntil(5_000) { taskTexts() == listOf("chleb", "cukinia") }
+
+        // Move "chleb" into Warzywa from its edit dialog; closing Warzywa then hides both.
+        composeTestRule.onNodeWithTag("TaskListElement0").performTouchInput { longClick() }
+        inDialog("Warzywa").performClick()
+        composeTestRule.onNodeWithText("Save").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Warzywa").performClick()
+        composeTestRule.waitUntil(5_000) { taskTexts().isEmpty() }
+
+        // Deleting the category keeps its items: they move to the top.
+        composeTestRule.onNodeWithTag("CategoryHeader").performTouchInput { longClick() }
+        inDialog("Delete").performClick()
+        composeTestRule.onNodeWithText("Delete category").performClick()
+        composeTestRule.waitUntil(5_000) { taskTexts().sorted() == listOf("chleb", "cukinia") }
+        composeTestRule.onNodeWithText("Warzywa").assertDoesNotExist()
+    }
+
+    @Test
+    fun deleteEverythingIsOnlyAvailableWhenThereIsSomethingToDelete() {
+        openNewList("Groceries")
+
+        composeTestRule.onNodeWithContentDescription("More options").performClick()
+        composeTestRule.onNodeWithText("Delete everything").assertIsNotEnabled()
+        Espresso.pressBack() // close the menu
+
+        addTask("milk")
+        composeTestRule.onNodeWithContentDescription("More options").performClick()
+        composeTestRule.onNodeWithText("Delete everything").assertIsEnabled()
+    }
+
+    private fun dragHandle(of: String, byY: Float) {
+        composeTestRule.onNodeWithContentDescription("Drag to reorder $of", useUnmergedTree = true).performTouchInput {
+            down(center)
+            repeat(25) { moveBy(Offset(0f, byY / 25), delayMillis = 16) }
+            up()
+        }
+        composeTestRule.waitForIdle()
+    }
+
+    @Test
+    fun draggingMovesItemsIntoAndOutOfCategories() {
+        openNewList("Zakupy")
+        addTask("chleb")
+        composeTestRule.onNodeWithContentDescription("More options").performClick()
+        composeTestRule.onNodeWithText("New category").performClick()
+        composeTestRule.onNodeWithTag("DialogTextField").performTextInput("Warzywa")
+        inDialog("Add").performClick()
+        composeTestRule.waitUntil(5_000) { textShown("Warzywa") }
+        composeTestRule.onNodeWithContentDescription("Add to Warzywa").performClick()
+        addTask("cukinia")
+
+        // Down past the header: "chleb" becomes Warzywa's first item; closing Warzywa hides both.
+        dragHandle("chleb", byY = 400f)
+        composeTestRule.onNodeWithText("Warzywa").performClick()
+        composeTestRule.waitUntil(5_000) { taskTexts().isEmpty() }
+
+        // Saved: still inside after leaving the list and coming back.
+        composeTestRule.onNodeWithContentDescription("Back").performClick()
+        composeTestRule.waitUntil(5_000) { textShown("ADHD List") }
+        composeTestRule.onNodeWithText("Zakupy").performClick()
+        composeTestRule.waitUntil(5_000) { textShown("Warzywa") }
+        assertEquals(emptyList<String>(), taskTexts())
+        composeTestRule.onNodeWithText("Warzywa").performClick()
+        composeTestRule.waitUntil(5_000) { taskTexts() == listOf("chleb", "cukinia") }
+
+        // Up past its header: back to the top of the list.
+        dragHandle("chleb", byY = -400f)
+        composeTestRule.onNodeWithText("Warzywa").performClick()
+        composeTestRule.waitUntil(5_000) { taskTexts() == listOf("chleb") }
     }
 
     @Test

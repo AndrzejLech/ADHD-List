@@ -1,5 +1,6 @@
 package com.example.adhdlist.presentation.common
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,8 +13,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -51,14 +54,25 @@ fun AddTextField(
     onAddButtonClick: () -> Unit,
     placeholder: String,
     // Items can span lines (e.g. exercise sets): Enter starts a new line and + adds.
-    multiLine: Boolean = false
+    multiLine: Boolean = false,
+    // Name of the category new items go into (shown as a chip with ✕), or null for the top of the list.
+    target: String? = null,
+    onClearTarget: () -> Unit = {}
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+      Column(Modifier.navigationBarsPadding().imePadding()) {
+        if (target != null) {
+            InputChip(
+                selected = true,
+                onClick = onClearTarget,
+                label = { Text("Adding to $target") },
+                trailingIcon = { Icon(Icons.Filled.Close, contentDescription = "Stop adding to $target") },
+                modifier = Modifier.padding(start = 16.dp, top = 8.dp).testTag("AddTarget")
+            )
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
-                .imePadding()
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -94,5 +108,6 @@ fun AddTextField(
                 Icon(imageVector = Icons.Filled.Add, contentDescription = "Add")
             }
         }
+      }
     }
 }

@@ -6,6 +6,7 @@ import androidx.room.withTransaction
 import com.example.adhdlist.data.model.ListWithProgress
 import com.example.adhdlist.data.model.TaskList
 import com.example.adhdlist.data.remote.SharedListsRemote
+import com.example.adhdlist.data.remote.SharedListsRemote.RemoteCategory
 import com.example.adhdlist.data.remote.SharedListsRemote.RemoteTask
 import com.example.adhdlist.data.room.TaskDatabase
 import com.example.adhdlist.data.sync.SharedListsSync
@@ -21,6 +22,7 @@ class ListRepository(
     private val taskDatabase = TaskDatabase.getInstance(context)
     private val listDao = taskDatabase.listDao()
     private val taskDao = taskDatabase.taskDao()
+    private val categoryDao = taskDatabase.categoryDao()
     private var taskList: Flow<MutableList<ListWithProgress>> = emptyFlow()
     private var listData: Flow<TaskList?> = emptyFlow()
 
@@ -106,18 +108,26 @@ class ListRepository(
             list.remoteId?.let { return Result.Success(it) }
             val uid = remote.signIn()
             val code = remote.newListId()
+            val categories = categoryDao.getForListOnce(listId).onEach { it.remoteId = remote.newCategoryId(code) }
             val tasks = taskDao.getTasksOnce(listId).onEach { it.remoteId = remote.newTaskId(code) }
+            val categoryRemoteIds = categories.associate { it.id to it.remoteId!! }
             // Room first: the sync must already know these ids when Firestore's snapshot arrives,
             // or it would insert the list and its tasks a second time.
             taskDatabase.withTransaction {
                 listDao.update(list.apply { remoteId = code })
+                categoryDao.update(categories)
                 taskDao.update(tasks)
             }
             try {
-                remote.createList(uid, code, list.name, tasks.map { RemoteTask(it.remoteId!!, it.message, it.state, it.position) })
+                remote.createList(
+                    uid, code, list.name,
+                    tasks.map { RemoteTask(it.remoteId!!, it.message, it.state, it.position, categoryRemoteIds[it.categoryId]) },
+                    categories.map { RemoteCategory(it.remoteId!!, it.name, it.position) }
+                )
             } catch (e: Exception) {
                 taskDatabase.withTransaction {
                     listDao.update(list.apply { remoteId = null })
+                    categoryDao.update(categories.onEach { it.remoteId = null })
                     taskDao.update(tasks.onEach { it.remoteId = null })
                 }
                 throw e

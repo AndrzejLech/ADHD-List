@@ -6,7 +6,8 @@ Paths are relative to `app/src/main/java/com/example/adhdlist/` (written `M/`). 
 
 History:
 * **Bug-fix pass:** commit `80c5731` on branch `fix/state-machine-bugs`.
-* **Feature pass:** branch `feature/shared-lists-redesign` added shared lists, reordering, and the AuDHD redesign. That pass found and fixed more state bugs (§1 N4, §2 F1, §4 D3/M1, §8 R1/R2/R6/R7).
+* **Feature pass:** branch `feature/shared-lists-redesign` added shared lists, reordering, and the AuDHD redesign.
+* **Categories:** branch `feature/categories` added one level of categories inside a list (§3c), with Room v5. That pass found and fixed more state bugs (§1 N4, §2 F1, §4 D3/M1, §8 R1/R2/R6/R7).
 
 Status legend: **FIXED** (regression test named), **OPEN** (documented, not fixed), **NOT A BUG** (checked and safe).
 
@@ -134,7 +135,7 @@ The first ⋮ entry is a small state machine driven by the items on screen:
 | NoneTicked | items exist, none ticked | **Check all** | ticks every item at once, without a dialog → SomeTicked |
 | Empty | no items | neither entry | — |
 
-The second entry is always **Delete everything**, which asks first.
+The other entries are **New category** (§3c) and **Delete everything**, which asks first. It is greyed out (not hidden, so the menu keeps its layout) while the list has no items and no categories. Test: `deleteEverythingIsOnlyAvailableWhenThereIsSomethingToDelete`.
 
 * **Invariant:** progress (ticks) is never lost on a single tap. Unticking everything always goes through a dialog.
 * Both entries write one value to every item: `TaskRepository.setAllTasks(listId, checked)`, a single `UPDATE` in Room or one Firestore batch for a shared list. Repeating either is harmless.
@@ -143,7 +144,74 @@ Tests: `TasksViewModelTest.check all ticks every item in this list`, the refresh
 
 ---
 
-## 4. Persisted data (Room v4)
+## 3c. Categories inside a list (accordion)
+
+`M/data/model/Category.kt`, `M/data/room/category/*`, `M/presentation/view/tasks/layout/CategoryHeader.kt`
+
+One level only: a list holds items without a category, shown at the top, and categories, each holding items (Zakupy → Warzywa → Cukinia). Categories don't nest.
+
+**A category's own state:** Open ⇄ Closed.
+* A tap on the header toggles it.
+* Tapping its + while it's closed opens it, so the new item is visible.
+* Stored in `category_table.expanded` on this phone only. It is never synced, so a shared list doesn't fold for the others.
+
+**Where the bottom field adds** (`TasksViewModel.addTargetId`):
+
+| State | Field shows | Event | To |
+|---|---|---|---|
+| Top | "Add something" | + on a category header | In(category) |
+| In(c) | chip "Adding to c ✕", placeholder "Add to c", header tinted | + on another header | In(other) |
+| In(c) | | ✕ on the chip | Top |
+| In(c) | | c deleted, here or by someone sharing the list | Top |
+| In(c) | | add an item | In(c): stays, so several items go in one after another |
+| any | | leave the list | Top (the ViewModel ends with the screen) |
+
+**Other events:**
+
+| Event | Effect |
+|---|---|
+| ⋮ → New category | name dialog; blank is refused |
+| Press and hold a header | dialog: rename, or **Delete**, which asks "Delete “Warzywa”? Its 3 items stay and move to the top of the list." |
+| Press and hold an item | edit dialog with category chips ("No category", Warzywa, …) to move it |
+| Drag an item onto another item | it takes that item's place and **its category** (top ⇄ category, or between categories) |
+| Drag an item down past a header | it becomes that category's first item; a closed category opens at once so the item stays visible |
+| Drag an item up past its own header | it moves to the end of the section above: the previous category, or the top of the list |
+| Delete everything | removes the list's items *and* its categories |
+
+Invariants:
+* **C-INV1:** deleting a category never deletes items. `CategoryDao.releaseItems` sets their `category_id` to null in the same transaction (or the same Firestore batch for a shared list).
+* **C-INV2:** an item whose category doesn't exist (yet) shows at the top, never disappears. Both the screen and the sync treat an unknown `category_id` as "no category".
+* **C-INV3:** for a shared list, an item is never mirrored before its category. Categories and items are mirrored together from one `combine` of the two listeners, in one transaction (`listContent` in `SharedListsSync.kt`).
+* **C-INV4:** items never wait on categories that can't be read. If the categories listener fails (for example security rules published before categories existed), `listContent` reports the categories as unknown (`null`). The items keep syncing, and the local categories are left exactly as they are until categories can be read again.
+
+**Fixed while building it** (both found by the device tests):
+* **C1: moving an item into a category could crash the list.**
+  * Cause: the rows were built in two places. Items at the top came from the screen's redraw; category rows came from inside `LazyColumn`'s builder, which runs later and could see newer data. A just-moved item then appeared twice, at the top and in its category, and the list threw "Key was already used" (sometimes reported as "layout state is not idle").
+  * Fix: all rows are built once from one read of the items and categories, then handed to the list (`ListRow` in `TasksScreen.kt`).
+  * Test: `categoriesGroupItemsFoldAndKeepTheirItemsWhenDeleted`, which crashed before the fix and passed 3 out of 3 runs alone and in full-suite runs after it.
+* **C3: with the old security rules, items in shared lists stopped syncing as well.**
+  * Found from a real-device log: the categories listener was refused (`PERMISSION_DENIED`), and because the sync waited for both categories and items, items never synced either.
+  * Fix: C-INV4.
+  * Test: `ListContentTest`.
+* **C2: one swipe could delete an item twice.** Material may confirm the same finished swipe twice, which sent two delete commands and two Undo snackbars. `TaskRow` now acts on the first only.
+
+Tests:
+* `TasksViewModelTest`:
+  * adding into a category opens it and keeps the target
+  * clearing the target
+  * the target is dropped when its category disappears
+  * moving an item between categories
+  * dragging onto an item in another category, down past a header, and up past its own header
+  * dragging into a closed category opens it
+  * the save carries the new category
+  * name validation
+* `MirrorPlanTest`: categories keep this phone's open/closed state; an item's category is mapped through the remote id and falls back to none.
+* UI `categoriesGroupItemsFoldAndKeepTheirItemsWhenDeleted`, `draggingMovesItemsIntoAndOutOfCategories`.
+* Sync `categoriesTravelWithTheListAndBothWays`.
+
+---
+
+## 4. Persisted data (Room v5)
 
 `M/data/model/*.kt`, `M/data/room/**`
 
@@ -155,12 +223,15 @@ Task:  (absent) ─create─► Unchecked ⇄ Checked ─delete─► (absent) �
 ```
 
 Columns added in v4: `position` (both tables) and `remote_id` (both tables).
+v5 adds `category_table` (`list_id` FK with CASCADE, `name`, `position`, `remote_id`, `expanded`) and `task_table.category_id`.
+`category_id` is nullable and has no foreign key, because SQLite can't add one to an existing table; deleting a category clears it explicitly (C-INV1).
 
 **Migration 3→4** (`TaskDatabase.MIGRATION_3_4`):
 * It adds the columns, then seeds `position` from the old ids, which keeps today's insertion order.
 * Before this, the database used `fallbackToDestructiveMigration()` with no migrations, so a version bump would have **wiped every user's data**.
 * The schema is now exported to `app/schemas/` for future migrations.
 * `fallbackToDestructiveMigration()` is removed. Git history shows v3 is the oldest schema ever shipped, so there is no older version to fall back from. A future migration that is forgotten now crashes in testing instead of silently deleting live users' lists.
+* **Migration 4→5** (`TaskDatabase.MIGRATION_4_5`) creates the categories table with exactly the SQL Room generates and adds `category_id`. Existing items start without a category, at the top. `MigrationTest` now goes from the real v3 database through v4 to v5.
 * **Rule for future changes:** bump `version`, add a `Migration`, and add a case to `MigrationTest`.
 
 Invariants:
@@ -242,7 +313,7 @@ Tests:
 ## 7. Errors (implicit)
 
 `handleError` sets `errorMessage`, and a long snackbar shows it. Every error now has a specific message:
-* empty name or item
+* empty name, category name or item
 * item too long (over 1000 characters, the shared-list limit)
 * invalid join code
 * join failed
@@ -258,7 +329,8 @@ Load errors in `getTasks` and `getListData` are now reported instead of swallowe
 `M/data/remote/SharedListsRemote.kt`, `M/data/sync/SharedListsSync.kt`, `M/data/sync/MirrorPlan.kt`, `firebase/firestore.rules`
 
 **Model:**
-* Firestore stores `lists/{code}` as `{name, members:[uid]}` and `lists/{code}/tasks/{id}` as `{message, state, position}`.
+* Firestore stores `lists/{code}` as `{name, members:[uid]}`, `lists/{code}/categories/{id}` as `{name, position}`, and `lists/{code}/tasks/{id}` as `{message, state, position, category?}`.
+* `category` is the category's document id, written only when set and removed with `FieldValue.delete()`. Rules published before categories existed therefore still accept every item without a category.
 * The 20-character random document id is the join code.
 * Each person uses an anonymous Firebase account, so there is no sign-in screen. The account persists across launches.
 
@@ -311,14 +383,16 @@ Invariants:
   * Fix: `markJoined` in `joinList`.
   * Test: `joiningUnderTheRealRulesThenLeavingAndRejoining`. This is also the first test of the joiner's side under the real rules.
 
-**Security rules** (`firebase/firestore.rules`, 9 tests in `firebase/test/rules.test.mjs`):
+**Security rules** (`firebase/firestore.rules`, 12 tests in `firebase/test/rules.test.mjs`):
 * Signed-out users can do nothing.
 * Creating a list is allowed only with yourself as the sole member.
 * Queries return only your own lists.
 * Reading a single list by its code is allowed; that is how joining works.
 * A non-member may only add *themselves* to `members`.
 * A member may rename the list or remove themselves. A member cannot remove others or delete the list.
-* Tasks are readable and writable only by members, and must have the right shape: message ≤ 1000 characters, a bool state, an int position.
+* Tasks are readable and writable only by members, and must have the right shape: message ≤ 1000 characters, a bool state, an int position, and optionally a text `category`.
+* Categories are readable and writable only by members, with a name ≤ 200 characters and an int position.
+* **The rules must be republished after this change.** Until then, items without a category keep syncing, but creating categories or putting items into them in a shared list is refused.
 
 **OPEN:**
 * **R3: no way to revoke a code.**
@@ -331,10 +405,11 @@ Invariants:
 
 Tests:
 * `MirrorPlanTest` (3): the Firestore → Room diff.
-* `SharedListSyncTest` (3): two people end to end against the emulator.
+* `SharedListSyncTest` (4): two people end to end against the emulator.
   * Share, upload, a remote add and rename arriving, a local check reaching the cloud, a local edit reaching the cloud with the check intact, and a remote delete arriving.
   * A rejected share.
   * Join, leave and rejoin under the real rules.
+  * Categories: share a list that has one, receive an item added to it elsewhere, move an item out of it.
 * Join codes are read from the text after `join/` or `code:` first, so a 20-character list name in the invite text isn't mistaken for the code. Test: `ListsViewModelTest`.
 
 ---
@@ -342,11 +417,12 @@ Tests:
 ## 9. Reorder (new)
 
 ```
-Idle ─handle drag─► Dragging (VM list reordered live: moveList / moveTask) ─drop─► SaveOrder ─► positions = index
+Idle ─handle drag─► Dragging (VM list reordered live: moveList / moveTask / moveTaskToSection) ─drop─► SaveOrder ─► positions = index (+ categories)
 ```
 
 * List order is per device and never synced.
-* Task order is shared: Room and Firestore are both written.
+* Task order is shared: Room and Firestore are both written. An item dragged into another section keeps its new category in the same save (`SharedListsRemote.setOrder` sends position and category together).
+* Rows are one flat list (§3c), so a LazyColumn index is an index into the rows; the screen maps a drop on a header to a section (`sectionAbove`).
 * A remote order change while someone is dragging is overwritten by that person's drop. Last drop wins.
 
 Tests:
@@ -373,13 +449,13 @@ Tests:
 
 ## Tests
 
-* **JVM**, `./gradlew :app:testDebugUnitTest`: 29 tests. `TasksViewModelTest` (14), `ListsViewModelTest` (7), `MirrorPlanTest` (3), `NavigationRepositoryTest` (3), `ExampleUnitTest` (2).
-* **Instrumented**, `./gradlew :app:connectedDebugAndroidTest`: 18 tests.
-  * `StateMachineRegressionTest` (11), `SharedListSyncTest` (3), `MigrationTest`, the existing `DeleteListTest` and `DeleteTaskTest`, plus the template `ExampleInstrumentedTest`.
+* **JVM**, `./gradlew :app:testDebugUnitTest`: 43 tests. `ListContentTest` (2), `TasksViewModelTest` (24), `ListsViewModelTest` (7), `MirrorPlanTest` (5), `NavigationRepositoryTest` (3), `ExampleUnitTest` (2).
+* **Instrumented**, `./gradlew :app:connectedDebugAndroidTest`: 22 tests.
+  * `StateMachineRegressionTest` (14), `SharedListSyncTest` (4), `MigrationTest`, the existing `DeleteListTest` and `DeleteTaskTest`, plus the template `ExampleInstrumentedTest`.
   * Run them on an emulator only (`ANDROID_SERIAL=emulator-5554`). They clear the app's data and uninstall it on **every** connected device, including a plugged-in phone.
   * `SharedListSyncTest` runs only with `-PfirebaseEmulatorHost=10.0.2.2` and `npm run emulators`; otherwise it is skipped.
   * The test APK excludes Espresso's old `protobuf-lite`, which otherwise shadows Firestore's protobuf and crashes the run.
-* **Security rules**, `cd firebase && npm test`: 9 tests.
+* **Security rules**, `cd firebase && npm test`: 12 tests.
 * **Harness flake (fixed):** `BaseUiTest` cleared the DB after the activity had started, so a test could tap the previous test's stale row. Now a rule ordered before the activity rule clears it first.
 * **Emulator isolation:** with `firebaseEmulatorHost` set, the app uses a separate named Firebase app for the `demo-adhdlist` project, even when `google-services.json` is present. Test data can't reach the real project.
 * **Real Firebase:** the automated sync tests run only against the local emulator. Sharing on the real `adhdlist` project was checked by hand: a phone and an emulator shared "Ćwiczenia".

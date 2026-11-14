@@ -1,8 +1,10 @@
 package com.example.adhdlist
 
+import com.example.adhdlist.data.model.Category
 import com.example.adhdlist.data.model.Task
 import com.example.adhdlist.data.model.TaskList
 import com.example.adhdlist.data.navigation.NavigationRepository
+import com.example.adhdlist.data.room.category.CategoryRepository
 import com.example.adhdlist.data.room.list.ListRepository
 import com.example.adhdlist.data.room.task.TaskRepository
 import com.example.adhdlist.domain.util.Result
@@ -38,6 +40,7 @@ class TasksViewModelTest {
     private val taskRepository: TaskRepository = mockk()
     private val listRepository: ListRepository = mockk()
     private val navigationRepository: NavigationRepository = mockk(relaxed = true)
+    private val categoryRepository: CategoryRepository = mockk(relaxed = true)
     private lateinit var vm: TasksViewModel
 
     @Before
@@ -46,7 +49,11 @@ class TasksViewModelTest {
         coEvery { taskRepository.insertTask(any()) } coAnswers { delay(100); Result.Success(true) }
         coEvery { taskRepository.updateTask(any()) } returns Result.Success(true)
         coEvery { listRepository.updateList(any()) } coAnswers { delay(100); Result.Success(true) }
-        vm = TasksViewModel(taskRepository, listRepository, navigationRepository)
+        coEvery { categoryRepository.setExpanded(any(), any()) } returns Result.Success(true)
+        coEvery { categoryRepository.createCategory(any(), any()) } returns Result.Success(true)
+        coEvery { categoryRepository.renameCategory(any()) } returns Result.Success(true)
+        coEvery { categoryRepository.deleteCategory(any()) } returns Result.Success(true)
+        vm = TasksViewModel(taskRepository, listRepository, navigationRepository, categoryRepository)
         vm.list = TaskList("Groceries").apply { id = 1; position = 4; remoteId = "r1" }
     }
 
@@ -166,7 +173,7 @@ class TasksViewModelTest {
         coEvery { taskRepository.reorderTasks(1, any()) } returns Result.Success(true)
         vm.getTasks(1)
 
-        vm.moveTask(0, 2)
+        vm.moveTask(fromId = 1, toId = 3)
         vm.triggerCommand(Command.SaveOrder)
         advanceUntilIdle()
 
@@ -181,6 +188,132 @@ class TasksViewModelTest {
         advanceUntilIdle()
 
         coVerify(exactly = 1) { taskRepository.setAllTasks(1, true) }
+    }
+
+    private val vegetables = Category(1, "Warzywa", id = 5, expanded = false)
+
+    @Test
+    fun `after tapping + on a category, new items go into it and the category opens`() = runTest(dispatcher) {
+        collectActions()
+        vm.triggerCommand(Command.AddTo(vegetables))
+        vm.newTaskMessage.value = "cukinia"
+        vm.handleAction(Action.CreateTask)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { categoryRepository.setExpanded(vegetables, true) }
+        coVerify(exactly = 1) { taskRepository.insertTask(match { it.message == "cukinia" && it.categoryId == 5 }) }
+        assertEquals(5, vm.addTargetId.value) // stays, so several items can go in one after another
+    }
+
+    @Test
+    fun `clearing the target sends new items back to the top`() = runTest(dispatcher) {
+        collectActions()
+        vm.triggerCommand(Command.AddTo(vegetables))
+        vm.triggerCommand(Command.AddTo(null))
+        vm.newTaskMessage.value = "chleb"
+        vm.handleAction(Action.CreateTask)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { taskRepository.insertTask(match { it.categoryId == null }) }
+    }
+
+    @Test
+    fun `when the target category disappears, adding goes back to the top`() = runTest(dispatcher) {
+        val categories = MutableStateFlow(listOf(vegetables))
+        every { categoryRepository.getCategories(1) } returns Result.Success(categories)
+        vm.getCategories(1)
+        vm.addTargetId.value = 5
+
+        categories.value = emptyList() // deleted here or by someone sharing the list
+        advanceUntilIdle()
+
+        assertEquals(null, vm.addTargetId.value)
+    }
+
+    @Test
+    fun `editing can move an item to another category, or just change its text`() = runTest(dispatcher) {
+        collectActions()
+        coEvery { taskRepository.editTask(any()) } returns Result.Success(true)
+        val item = Task(1, "cukinia", id = 7, categoryId = null)
+        vm.triggerCommand(Command.EditItem(item, "cukinia", categoryId = 5))
+        vm.triggerCommand(Command.EditItem(item, "cukinia", categoryId = null)) // nothing changed
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { taskRepository.editTask(any()) }
+        coVerify { taskRepository.editTask(item.copy(categoryId = 5)) }
+    }
+
+    private fun feed(vararg items: Task) {
+        every { taskRepository.getTasks(1) } returns Result.Success(MutableStateFlow(items.toMutableList()))
+        vm.getTasks(1)
+    }
+
+    private fun shown() = vm.feedList.value.map { it.id to it.categoryId }
+
+    @Test
+    fun `dragging onto an item in another category moves it there`() = runTest(dispatcher) {
+        feed(Task(1, "chleb", id = 1), Task(1, "cukinia", id = 2, categoryId = 5), Task(1, "papryka", id = 3, categoryId = 5))
+
+        vm.moveTask(fromId = 1, toId = 3)
+
+        assertEquals(listOf(2 to 5, 3 to 5, 1 to 5), shown())
+    }
+
+    @Test
+    fun `dragging down past a header makes it that category's first item`() = runTest(dispatcher) {
+        feed(Task(1, "chleb", id = 1), Task(1, "cukinia", id = 2, categoryId = 5))
+
+        vm.moveTaskToSection(fromId = 1, categoryId = 5, first = true)
+
+        assertEquals(listOf(1 to 5, 2 to 5), shown())
+    }
+
+    @Test
+    fun `dragging up past its own header moves it to the end of the section above`() = runTest(dispatcher) {
+        feed(Task(1, "chleb", id = 1), Task(1, "cukinia", id = 2, categoryId = 5), Task(1, "mleko", id = 3))
+
+        vm.moveTaskToSection(fromId = 2, categoryId = null, first = false)
+
+        assertEquals(listOf(1 to null, 3 to null, 2 to null), shown())
+    }
+
+    @Test
+    fun `dragging into a closed category opens it so the item stays visible`() = runTest(dispatcher) {
+        every { categoryRepository.getCategories(1) } returns Result.Success(MutableStateFlow(listOf(vegetables)))
+        vm.getCategories(1)
+        feed(Task(1, "chleb", id = 1))
+
+        vm.moveTaskToSection(fromId = 1, categoryId = 5, first = true)
+        advanceUntilIdle()
+
+        assertTrue(vm.categories.value.single().expanded)
+        coVerify(exactly = 1) { categoryRepository.setExpanded(vegetables, true) }
+    }
+
+    @Test
+    fun `dropping saves the new order together with the new category`() = runTest(dispatcher) {
+        collectActions()
+        coEvery { taskRepository.reorderTasks(1, any()) } returns Result.Success(true)
+        feed(Task(1, "chleb", id = 1), Task(1, "cukinia", id = 2, categoryId = 5))
+
+        vm.moveTaskToSection(fromId = 1, categoryId = 5, first = true)
+        vm.triggerCommand(Command.SaveOrder)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { taskRepository.reorderTasks(1, match { list -> list.map { it.id to it.categoryId } == listOf(1 to 5, 2 to 5) }) }
+    }
+
+    @Test
+    fun `categories need a name, and renaming to the same name writes nothing`() = runTest(dispatcher) {
+        collectActions()
+        vm.triggerCommand(Command.NewCategory("  "))
+        vm.triggerCommand(Command.RenameCategory(vegetables, " Warzywa "))
+        vm.triggerCommand(Command.NewCategory(" Owoce "))
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { categoryRepository.renameCategory(any()) }
+        coVerify(exactly = 1) { categoryRepository.createCategory(any(), any()) }
+        coVerify { categoryRepository.createCategory(1, "Owoce") }
     }
 
     @Test

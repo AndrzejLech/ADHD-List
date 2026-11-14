@@ -8,12 +8,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.toMutableStateList
 import androidx.lifecycle.viewModelScope
+import com.example.adhdlist.data.model.Category
 import com.example.adhdlist.data.model.Task
 import com.example.adhdlist.data.model.TaskList
 import com.example.adhdlist.data.navigation.NavigationRepository
 import com.example.adhdlist.data.remote.SharedListsRemote
+import com.example.adhdlist.data.room.category.CategoryRepository
 import com.example.adhdlist.data.room.list.ListRepository
 import com.example.adhdlist.data.room.task.TaskRepository
+import com.example.adhdlist.domain.database.categories.CreateCategoryUseCase
+import com.example.adhdlist.domain.database.categories.DeleteCategoryUseCase
+import com.example.adhdlist.domain.database.categories.GetCategoriesUseCase
+import com.example.adhdlist.domain.database.categories.RenameCategoryUseCase
+import com.example.adhdlist.domain.database.categories.SetCategoryExpandedUseCase
 import com.example.adhdlist.domain.database.lists.GetListUseCase
 import com.example.adhdlist.domain.database.lists.ShareListUseCase
 import com.example.adhdlist.domain.database.lists.UpdateListUseCase
@@ -46,7 +53,8 @@ import javax.inject.Inject
 class TasksViewModel @Inject constructor(
     private val taskRepository: TaskRepository,
     private val listRepository: ListRepository,
-    private val navigationRepository: NavigationRepository
+    private val navigationRepository: NavigationRepository,
+    private val categoryRepository: CategoryRepository
 ) : BaseViewModel() {
     override val TAG = "TasksViewModel"
     var newTaskMessage: MutableState<String> = mutableStateOf("")
@@ -62,6 +70,13 @@ class TasksViewModel @Inject constructor(
     private val _listData = MutableStateFlow<TaskList?>(null)
     val listData: StateFlow<TaskList?> = _listData.asStateFlow()
     private var listJob: Job? = null
+
+    private val _categories = MutableStateFlow<List<Category>>(emptyList())
+    val categories: StateFlow<List<Category>> = _categories.asStateFlow()
+    private var categoriesJob: Job? = null
+
+    // Where the bottom field adds: a category's id after its + was tapped, or null for the top of the list.
+    val addTargetId: MutableState<Int?> = mutableStateOf(null)
 
     private val _shareCodes = Channel<String>()
     val shareCodes: Flow<String> = _shareCodes.receiveAsFlow()
@@ -114,8 +129,29 @@ class TasksViewModel @Inject constructor(
                     when {
                         text.isEmpty() -> _errors.send(Error.EmptyNewTask)
                         text.length > SharedListsRemote.MAX_TASK_LENGTH -> _errors.send(Error.TaskTooLong)
-                        text != command.task.message -> _actions.send(Action.EditItem(command.task.copy(message = text)))
+                        text != command.task.message || command.categoryId != command.task.categoryId ->
+                            _actions.send(Action.EditItem(command.task.copy(message = text, categoryId = command.categoryId)))
                     }
+                }
+
+                is Command.NewCategory -> if (command.name.isNotBlank()) {
+                    _actions.send(Action.NewCategory(command.name.trim()))
+                } else {
+                    _errors.send(Error.EmptyCategoryName)
+                }
+
+                is Command.RenameCategory -> when {
+                    command.name.isBlank() -> _errors.send(Error.EmptyCategoryName)
+                    command.name.trim() != command.category.name ->
+                        _actions.send(Action.RenameCategory(command.category.copy(name = command.name.trim())))
+                }
+
+                is Command.DeleteCategory -> _actions.send(Action.DeleteCategory(command.category))
+                is Command.ToggleCategory -> _actions.send(Action.ToggleCategory(command.category))
+                is Command.AddTo -> {
+                    // Adding into a closed category opens it, so the new item is visible.
+                    command.category?.takeIf { !it.expanded }?.let { _actions.send(Action.ToggleCategory(it)) }
+                    addTargetId.value = command.category?.id
                 }
                 Command.SaveOrder -> _actions.send(Action.SaveOrder)
                 Command.Share -> _actions.send(Action.Share)
@@ -150,6 +186,15 @@ class TasksViewModel @Inject constructor(
                 is Action.RestoreTask -> report(RestoreTaskUseCase(taskRepository).execute(action.task))
                 is Action.UpdateTask -> report(UpdateTaskUseCase(taskRepository).execute(action.task))
                 is Action.EditItem -> report(EditTaskUseCase(taskRepository).execute(action.task))
+                is Action.NewCategory -> report(CreateCategoryUseCase(categoryRepository).execute(list.id, action.name))
+                is Action.RenameCategory -> report(RenameCategoryUseCase(categoryRepository).execute(action.category))
+                is Action.DeleteCategory -> {
+                    if (addTargetId.value == action.category.id) addTargetId.value = null
+                    report(DeleteCategoryUseCase(categoryRepository).execute(action.category))
+                }
+                is Action.ToggleCategory -> report(
+                    SetCategoryExpandedUseCase(categoryRepository).execute(action.category, !action.category.expanded)
+                )
                 is Action.RenameList -> renameList(action.name)
                 Action.RefreshTasks -> report(RefreshTasksUseCase(taskRepository).execute(list.id))
                 Action.CheckAll -> report(CheckAllTasksUseCase(taskRepository).execute(list.id))
@@ -164,6 +209,7 @@ class TasksViewModel @Inject constructor(
             is Error.EmptyNewTask -> errorMessage = "Type something first."
             is Error.TaskTooLong -> errorMessage = "That's very long. Please keep it under ${SharedListsRemote.MAX_TASK_LENGTH} characters."
             is Error.EmptyListName -> errorMessage = "List name cannot be empty."
+            is Error.EmptyCategoryName -> errorMessage = "Category name cannot be empty."
             is Error.ShareFailed -> errorMessage = "Couldn't share. Check your internet connection and try again."
             is Error.UnknownError -> {
                 errorMessage = "Something went wrong."
@@ -196,6 +242,21 @@ class TasksViewModel @Inject constructor(
         }
     }
 
+    fun getCategories(listId: Int) {
+        if (categoriesJob != null) return
+        categoriesJob = viewModelScope.launch {
+            when (val result = GetCategoriesUseCase(categoryRepository).execute(listId)) {
+                is Result.Success -> result.data.collect { categories ->
+                    _categories.value = categories
+                    // The target category was deleted (here or by someone sharing the list): back to the top.
+                    if (categories.none { it.id == addTargetId.value }) addTargetId.value = null
+                }
+
+                is Result.Error -> _errors.send(Error.UnknownError(result.error))
+            }
+        }
+    }
+
     fun getListData(listId: Int) {
         if (listJob != null) return
         listJob = viewModelScope.launch {
@@ -220,7 +281,7 @@ class TasksViewModel @Inject constructor(
         if (message.isEmpty() || message.length > SharedListsRemote.MAX_TASK_LENGTH) return
         newTaskMessage.value = ""
         viewModelScope.launch {
-            val result = CreateTaskUseCase(taskRepository).execute(Task(list.id, message))
+            val result = CreateTaskUseCase(taskRepository).execute(Task(list.id, message, categoryId = addTargetId.value))
             when (result) {
                 is Result.Success -> {
                     Logger.d(TAG, "Methode", "Creating Task ended with Success")
@@ -256,8 +317,33 @@ class TasksViewModel @Inject constructor(
     }
 
     /** Called on every drag step; only reorders what is shown. SaveOrder persists on drop. */
-    fun moveTask(from: Int, to: Int) {
-        _feedList.value.add(to, _feedList.value.removeAt(from))
+    /** Drag step onto another item: the dragged item takes its place and its category. */
+    fun moveTask(fromId: Int, toId: Int) {
+        val items = _feedList.value
+        val from = items.indexOfFirst { it.id == fromId }
+        val to = items.indexOfFirst { it.id == toId }
+        if (from < 0 || to < 0) return
+        val categoryId = items[to].categoryId
+        items.add(to, items.removeAt(from).copy(categoryId = categoryId))
+    }
+
+    /**
+     * Drag step onto a category header: the item now belongs to [categoryId] (null: the top of the
+     * list), at the start of that section if [first], else at its end. A closed category opens at
+     * once, so the item being dragged never disappears under the finger.
+     */
+    fun moveTaskToSection(fromId: Int, categoryId: Int?, first: Boolean) {
+        val items = _feedList.value
+        val from = items.indexOfFirst { it.id == fromId }
+        if (from < 0) return
+        val moved = items.removeAt(from).copy(categoryId = categoryId)
+        val section = items.indices.filter { items[it].categoryId == categoryId }
+        val at = if (first) section.firstOrNull() ?: items.size else section.lastOrNull()?.plus(1) ?: items.size
+        items.add(at, moved)
+        _categories.value.firstOrNull { it.id == categoryId && !it.expanded }?.let { closed ->
+            _categories.value = _categories.value.map { if (it.id == closed.id) it.copy(expanded = true) else it }
+            viewModelScope.launch { report(SetCategoryExpandedUseCase(categoryRepository).execute(closed, true)) }
+        }
     }
 
     private fun share() {
@@ -284,13 +370,18 @@ class TasksViewModel @Inject constructor(
         object NavigateBack : BaseCommand()
         object RefreshTasks : BaseCommand()
         object CheckAll : BaseCommand()
+        data class NewCategory(val name: String) : BaseCommand()
+        data class RenameCategory(val category: Category, val name: String) : BaseCommand()
+        data class DeleteCategory(val category: Category) : BaseCommand()
+        data class ToggleCategory(val category: Category) : BaseCommand()
+        data class AddTo(val category: Category?) : BaseCommand()
         object SaveOrder : BaseCommand()
         object Share : BaseCommand()
         data class RenameList(val name: String) : BaseCommand()
         data class ChangeState(val task: Task, val checked: Boolean) : BaseCommand()
         data class SwipeTaskDelete(val task: Task) : BaseCommand()
         data class RestoreTask(val task: Task) : BaseCommand()
-        data class EditItem(val task: Task, val text: String) : BaseCommand()
+        data class EditItem(val task: Task, val text: String, val categoryId: Int? = task.categoryId) : BaseCommand()
     }
 
     sealed class Action : BaseAction() {
@@ -299,6 +390,10 @@ class TasksViewModel @Inject constructor(
         object NavigateBack : BaseAction()
         object RefreshTasks : BaseAction()
         object CheckAll : BaseAction()
+        data class NewCategory(val name: String) : BaseAction()
+        data class RenameCategory(val category: Category) : BaseAction()
+        data class DeleteCategory(val category: Category) : BaseAction()
+        data class ToggleCategory(val category: Category) : BaseAction()
         object SaveOrder : BaseAction()
         object Share : BaseAction()
         data class RenameList(val name: String) : BaseAction()
@@ -312,6 +407,7 @@ class TasksViewModel @Inject constructor(
         object EmptyNewTask : BaseError()
         object TaskTooLong : BaseError()
         object EmptyListName : BaseError()
+        object EmptyCategoryName : BaseError()
         object ShareFailed : BaseError()
         data class UnknownError(val cause: Exception) : BaseError()
     }

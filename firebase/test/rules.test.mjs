@@ -6,6 +6,7 @@ import {
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import {
+  deleteField,
   writeBatch,
   arrayRemove, arrayUnion, collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where,
 } from 'firebase/firestore';
@@ -99,4 +100,29 @@ test('a stranger cannot sneak tasks in alongside a fake join', async () => {
   batch.update(list('eve'), { members: arrayUnion('eve', 'mallory') });
   batch.set(task('eve', 'evil'), { message: 'spam', state: false, position: 9 });
   await assertFails(batch.commit());
+});
+
+test('members manage categories; strangers cannot; categories must have the right shape', async () => {
+  const cat = (uid, id = 'c1') => doc(db(uid), 'lists', LIST, 'categories', id);
+  await assertSucceeds(setDoc(cat('alice'), { name: 'Warzywa', position: 0 }));
+  await assertSucceeds(getDoc(cat('alice')));
+  await assertFails(getDoc(cat('bob')));
+  await assertFails(setDoc(cat('bob', 'c2'), { name: 'Spam', position: 1 }));
+  await assertFails(setDoc(cat('alice', 'c3'), { name: 'x'.repeat(201), position: 1 }));
+  await assertFails(setDoc(cat('alice', 'c4'), { name: 'Owoce', position: 1, color: 'red' }));
+  await assertSucceeds(deleteDoc(cat('alice')));
+});
+
+test('items may carry a category id (text) or none', async () => {
+  await assertSucceeds(setDoc(task('alice', 't5'), { message: 'cukinia', state: false, position: 2, category: 'c1' }));
+  await assertSucceeds(updateDoc(task('alice', 't5'), { category: deleteField() }));
+  await assertFails(setDoc(task('alice', 't6'), { message: 'x', state: false, position: 3, category: 7 }));
+});
+
+test('sharing a list with categories works in one batch', async () => {
+  const batch = writeBatch(db('dave'));
+  batch.set(doc(db('dave'), 'lists', 'd2'), { name: 'Zakupy', members: ['dave'] });
+  batch.set(doc(db('dave'), 'lists', 'd2', 'categories', 'w'), { name: 'Warzywa', position: 0 });
+  batch.set(doc(db('dave'), 'lists', 'd2', 'tasks', 'x'), { message: 'cukinia', state: false, position: 0, category: 'w' });
+  await assertSucceeds(batch.commit());
 });

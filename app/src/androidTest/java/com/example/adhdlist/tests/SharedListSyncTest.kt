@@ -7,6 +7,9 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.filterToOne
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
@@ -14,6 +17,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.adhdlist.BaseUiTest
 import com.example.adhdlist.BuildConfig
+import com.example.adhdlist.data.model.Category
 import com.example.adhdlist.data.model.Task
 import com.example.adhdlist.data.model.TaskList
 import com.example.adhdlist.data.room.TaskDatabase
@@ -151,7 +155,52 @@ class SharedListSyncTest : BaseUiTest() {
         waitFor { textShown("Book club") }
     }
 
-    private data class RemoteTask(val id: String, val message: String, val state: Boolean)
+    @Test
+    fun categoriesTravelWithTheListAndBothWays() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val db = TaskDatabase.getInstance(context)
+        // A local list with a category and an item in it, then shared.
+        val listId = runBlocking {
+            db.listDao().insert(TaskList("Zakupy")).toInt().also { id ->
+                val category = db.categoryDao().insert(Category(id, "Warzywa")).toInt()
+                db.taskDao().insert(Task(id, "cukinia", categoryId = category))
+            }
+        }
+        val code = runBlocking { (listRepository.shareList(listId) as Result.Success).data }
+
+        // The cloud has the category, and the item points at it.
+        waitFor { remoteCategories(code).values.contains("Warzywa") }
+        val categoryDoc = remoteCategories(code).entries.single { it.value == "Warzywa" }.key
+        waitFor { remoteTasks(code).single().category == categoryDoc }
+
+        // The other person adds "papryka" into Warzywa; here it appears under that header.
+        commit("""{"update":{"name":"$project/lists/$code/tasks/fromB",
+            "fields":{"message":{"stringValue":"papryka"},"state":{"booleanValue":false},"position":{"integerValue":"1"},
+            "category":{"stringValue":"$categoryDoc"}}}}""")
+        composeTestRule.onNodeWithText("Zakupy").performClick()
+        waitFor { taskTexts() == listOf("cukinia", "papryka") }
+        composeTestRule.onNodeWithText("Warzywa").performClick() // close it: both are inside
+        waitFor { taskTexts().isEmpty() }
+        composeTestRule.onNodeWithText("Warzywa").performClick()
+        waitFor { taskTexts().size == 2 }
+
+        // Here, "papryka" moves to no category; in the cloud its category field goes away.
+        composeTestRule.onAllNodesWithTag("TaskListElement1")[0].performTouchInput { longClick() }
+        composeTestRule.onAllNodesWithText("No category").filterToOne(hasAnyAncestor(isDialog())).performClick()
+        composeTestRule.onNodeWithText("Save").performClick()
+        waitFor { remoteTasks(code).single { it.id == "fromB" }.category == null }
+    }
+
+    private fun remoteCategories(code: String): Map<String, String> {
+        val body = JSONObject(http("GET", "http://$host:8080/v1/$project/lists/$code/categories"))
+        val docs = body.optJSONArray("documents") ?: JSONArray()
+        return (0 until docs.length()).associate { i ->
+            val doc = docs.getJSONObject(i)
+            doc.getString("name").substringAfterLast('/') to doc.getJSONObject("fields").getJSONObject("name").getString("stringValue")
+        }
+    }
+
+    private data class RemoteTask(val id: String, val message: String, val state: Boolean, val category: String? = null)
 
     private fun remoteTasks(code: String): List<RemoteTask> {
         val body = JSONObject(http("GET", "http://$host:8080/v1/$project/lists/$code/tasks"))
@@ -162,7 +211,8 @@ class SharedListSyncTest : BaseUiTest() {
             RemoteTask(
                 id = doc.getString("name").substringAfterLast('/'),
                 message = fields.getJSONObject("message").getString("stringValue"),
-                state = fields.getJSONObject("state").getBoolean("booleanValue")
+                state = fields.getJSONObject("state").getBoolean("booleanValue"),
+                category = fields.optJSONObject("category")?.getString("stringValue")
             )
         }
     }

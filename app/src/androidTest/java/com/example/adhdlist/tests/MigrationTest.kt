@@ -25,7 +25,7 @@ class MigrationTest {
     }
 
     @Test
-    fun v3DataSurvivesUpgradeInItsOriginalOrder() = runBlocking {
+    fun v3DataSurvivesUpgradeToTheLatestVersionInItsOriginalOrder() = runBlocking {
         context.deleteDatabase(name)
         SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(name), null).use { db ->
             // Exactly what Room 2.6.1 created for version 3 (from the generated TaskDatabase_Impl).
@@ -40,7 +40,7 @@ class MigrationTest {
 
         // No destructive fallback here: if the migration were wrong, Room would throw instead of wiping.
         val room = Room.databaseBuilder(context, TaskDatabase::class.java, name)
-            .addMigrations(TaskDatabase.MIGRATION_3_4)
+            .addMigrations(TaskDatabase.MIGRATION_3_4, TaskDatabase.MIGRATION_4_5)
             .build()
         try {
             val lists = room.listDao().getAllLists().first()
@@ -52,6 +52,9 @@ class MigrationTest {
             assertEquals(listOf("milk", "eggs"), tasks.map { it.message })
             assertEquals(listOf(true, false), tasks.map { it.state })
             assertEquals(tasks.map { it.id }, tasks.map { it.position })
+            // v5: categories exist but are empty; every item starts at the top (no category).
+            assertEquals(emptyList<Any>(), room.categoryDao().getForListOnce(1))
+            assertEquals(listOf(null, null), tasks.map { it.categoryId })
         } finally {
             room.close()
         }

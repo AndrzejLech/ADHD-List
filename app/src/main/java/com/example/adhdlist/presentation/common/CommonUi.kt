@@ -81,7 +81,10 @@ fun TextInputDialog(
     confirmLabel: String,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
-    multiLine: Boolean = false
+    multiLine: Boolean = false,
+    // Optional extras: content under the field (e.g. category chips) and a left-hand button (e.g. delete).
+    extraContent: (@Composable () -> Unit)? = null,
+    extraAction: Pair<String, () -> Unit>? = null
 ) {
     var value by remember { mutableStateOf(TextFieldValue(initial, TextRange(initial.length))) }
     val focusRequester = remember { FocusRequester() }
@@ -90,6 +93,7 @@ fun TextInputDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
+            Column {
             OutlinedTextField(
                 value = value,
                 onValueChange = { value = it },
@@ -106,8 +110,20 @@ fun TextInputDialog(
             )
             // Inside the dialog's own composition: the field must be attached before it can take focus.
             LaunchedEffect(Unit) { focusRequester.requestFocus() }
+            extraContent?.let {
+                Spacer(Modifier.height(16.dp))
+                it()
+            }
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            Row {
+                extraAction?.let { (label, action) ->
+                    TextButton(onClick = action) { Text(label, color = MaterialTheme.colorScheme.error) }
+                }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
         confirmButton = {
             TextButton(onClick = { onConfirm(value.text) }, enabled = canConfirm) { Text(confirmLabel) }
         }

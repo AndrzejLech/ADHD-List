@@ -3,6 +3,7 @@ package com.example.adhdlist.di
 import android.content.Context
 import com.example.adhdlist.data.navigation.NavigationRepository
 import com.example.adhdlist.data.remote.SharedListsRemote
+import com.example.adhdlist.data.room.category.CategoryRepository
 import com.example.adhdlist.data.room.list.ListRepository
 import com.example.adhdlist.data.room.task.TaskRepository
 import com.example.adhdlist.data.sync.SharedListsSync
@@ -41,6 +42,15 @@ class AppModule {
         remote: SharedListsRemote
     ): TaskRepository {
         return TaskRepository(context, remote)
+    }
+
+    @Provides
+    @Singleton
+    fun provideCategoryRepository(
+        @ApplicationContext context: Context,
+        remote: SharedListsRemote
+    ): CategoryRepository {
+        return CategoryRepository(context, remote)
     }
 
     @Provides
