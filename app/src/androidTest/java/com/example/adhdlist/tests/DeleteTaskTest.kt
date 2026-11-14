@@ -25,7 +25,7 @@ class DeleteTaskTest : BaseUiTest() {
             }
             step("Confirm creation of test list") {
                 addButton.performClick()
-                Espresso.pressBack()
+                Espresso.closeSoftKeyboard()
             }
             list.childAt<LazyListOfListItemNode>(position = 0) {
                 step("Check if created list has expected name") {

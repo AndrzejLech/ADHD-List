@@ -1,8 +1,12 @@
 # ADHD List: state machines
 
-This file covers every state machine in the app, whether explicit (a sealed class) or implicit (spread across flags, channels and the DB). For each one it lists the states, the invariants and the transitions. It also records the invalid states the code could actually reach, the evidence for each, and how each was fixed and tested.
+This file covers every state machine in the app, whether explicit (a sealed class) or implicit (spread across flags, channels, Room and Firestore). For each one it lists the states, the invariants and the transitions. It also records the invalid states the code could actually reach, the evidence for each, and how each was fixed and tested.
 
-Paths are relative to `app/src/main/java/com/example/adhdlist/` (written `M/`). Line numbers refer to the fixed code. "Original" means commit `ad96453`.
+Paths are relative to `app/src/main/java/com/example/adhdlist/` (written `M/`). Functions are named instead of line numbers so the references stay valid as the code changes.
+
+History:
+* **Bug-fix pass:** commit `80c5731` on branch `fix/state-machine-bugs`.
+* **Feature pass:** branch `feature/shared-lists-redesign` added shared lists, reordering, and the AuDHD redesign. That pass found and fixed more state bugs (§1 N4, §2 F1, §4 D3/M1, §8 R1/R2/R6/R7).
 
 Status legend: **FIXED** (regression test named), **OPEN** (documented, not fixed), **NOT A BUG** (checked and safe).
 
@@ -10,20 +14,16 @@ Status legend: **FIXED** (regression test named), **OPEN** (documented, not fixe
 
 ## 0. The event pipeline every screen shares
 
-Each user event goes through the same asynchronous chain:
-
 ```
 UI callback ─► vm.triggerCommand(Command)        validates, viewModelScope.launch
             ─► _actions: Channel (rendezvous)    received by a LaunchedEffect in the screen
             ─► vm.handleAction(Action)           viewModelScope.launch
-            ─► private fun (createTask, ...)     viewModelScope.launch ─► suspend Room call
+            ─► private fun / use case            ─► repository ─► Room (local list) or Firestore (shared list)
 ```
 
-Consequences that every machine below inherits:
-
-* A command is **validated at one moment and executed at a later one**, with at least one main-looper hop in between, plus the Room round trip. Two fast taps can both pass validation before either of them executes. Every executor that relies on a precondition must therefore check it again when it runs.
-* Commands sent while the screen is not collecting `actions` (it is away, or between compositions) wait suspended in `send` and run later.
-* Errors go through a second rendezvous channel. `handleError` sets `errorMessage`, and the screen then shows a snackbar.
+* A command is **validated at one moment and executed at a later one**. Every executor that relies on a precondition checks it again when it runs.
+* Drag steps are the one exception to this pipeline. `moveList` and `moveTask` are called directly, because the reorder library needs the list to change in the same frame. Only the drop goes through the pipeline (`Command.SaveOrder`).
+* Errors and confirmations go through their own channels, and each is shown as a long-duration snackbar.
 
 ---
 
@@ -31,292 +31,356 @@ Consequences that every machine below inherits:
 
 `M/MainActivity.kt`, `M/data/navigation/NavigationRepository.kt`
 
-| State | Back stack |
-|---|---|
-| `Lists` | `[lists]` (start destination) |
-| `Tasks(L)` | `[lists, tasks/{json(L)}]` |
-| `Empty` (**invalid**) | `[]`: NavHost renders nothing, so the app shows a blank screen |
-| `Tasks(L)·Tasks(L)` (**invalid**) | two task entries stacked |
-
 Invariants:
-* **N-INV1:** the back stack always contains `lists` at its bottom.
+* **N-INV1:** `lists` is always at the bottom of the back stack.
 * **N-INV2:** at most one `tasks` entry exists at a time.
-* **N-INV3:** navigating never changes the `TaskList` object that the lists screen displays.
+* **N-INV3:** navigating never changes the `TaskList` object that is displayed.
+* **N-INV4:** one activity and one NavController. `NavigationRepository` is a process singleton holding a single controller, so `MainActivity` is `singleTask`, and join links and shared texts arrive through `onNewIntent` instead of starting a second copy on top of the sending app.
 
-| From | Event | Guard (fixed code) | To |
+| From | Event | Guard | To |
 |---|---|---|---|
-| Lists | tap row (`NavigateToList`) | `currentDestination.route == "lists"` (`NavigationRepository.kt:24`) | Tasks(L) |
-| Tasks | tap row again (a second tap while the first navigation is in flight) | guard fails → ignored | Tasks |
-| Tasks(Normal) | system back | `BackHandler` → `NavigateBack` | Lists |
-| Tasks(Edit) | system back | `BackHandler` → `ChangeUiState(Normal)` | Tasks(Normal) |
-| Tasks | toolbar ← arrow | `previousBackStackEntry != null` (`NavigationRepository.kt:31`) | Lists |
-| Lists | ← arrow pressed again while the tasks screen is still sliding out | guard fails → ignored | Lists |
-| Lists | system back | the activity finishes (normal Android behavior) | (app closed) |
+| Lists | tap a list card | `currentDestination.route == "lists"` | Tasks(L) |
+| Tasks | ← arrow or system back | `previousBackStackEntry != null` | Lists |
+| Lists | system back | — | the app closes (normal Android behavior) |
+| any | `adhdlist://join/<code>` link or invite text shared into the app | — | Lists + the join dialog (§8) |
+| Tasks(L) | L is deleted or left | `getListData` sees `null` → back | Lists |
 
-How the argument travels: `Gson(list)` is encoded with `Uri.encode` and becomes the route path segment. Navigation then calls `Uri.decode`, and `MainActivity.kt:77` parses the result with `gson.fromJson`. The `TaskList` received on the tasks screen is a snapshot of the list at navigation time.
+The route argument is the whole `TaskList` serialized with Gson and passed through `Uri.encode`. Transitions are 200 ms fades.
 
-### Bugs
+**Fixed:**
+* **N4:** with `singleTop`, opening a join link from another app could create a second `MainActivity`, so taps in one copy drove the other copy's navigation. Now `singleTask`.
+* **N1:** a double tap on ← emptied the back stack, leaving a blank screen.
+* **N2:** a double tap on a list pushed two tasks screens.
+* **N3:** navigating mutated the displayed list's name.
 
-**N1: a double tap on the ← arrow empties the back stack (blank screen). FIXED, issue 1. Severity: high.**
-* Evidence: originally `popNavigation()` called `popBackStack()` without a guard. The arrow `IconButton` (`TasksScreen.kt:69`) remains composed and clickable while the 500 ms exit transition runs. Its `onClick` is not lifecycle-aware.
-* What happens: the second tap pops `lists`, which leaves `[]` and a white screen. Only killing the app recovers from it.
-* Reproduced on the emulator with the original code: the UI test fails with "could not find ListsTextField".
-* System back does **not** trigger this. `BackHandler` registers against the nav entry's lifecycle, so it unregisters as soon as the entry is popped. I confirmed this in logcat: only one `NavigatingBack` was logged, and the second press finished the activity.
-* Fix: pop only when an entry exists below the current one.
-* Tests: `NavigationRepositoryTest.double back press does not pop the start destination`, and the UI test `StateMachineRegressionTest.doubleTapOnBackArrowLandsOnLists`.
-
-**N2: a double tap on a list row pushes two tasks screens. FIXED, issue 1. Severity: medium.**
-* Evidence: originally `navigateToList` had no guard. The row's `clickable` (`TaskListListElement.kt:122`) stays live during the transition.
-* Fix: navigate only from `lists`.
-* Test: `NavigationRepositoryTest.double tap on a list navigates once`.
-
-**N3: navigating changed the displayed list's name in place (double encoding). FIXED, issue 1. Severity: medium.**
-* Evidence: originally the code ran `list.name = Uri.encode(list.name)` on the item object from `ListsViewModel`'s feed.
-* Result: the row in the lists screen showed `a%20b` while sliding out. A second navigation (N2) encoded the name twice, so the tasks title showed `a%20b`.
-* Fix: encode the serialized JSON and leave the object alone.
-* Test: `NavigationRepositoryTest.navigating does not mutate the list shown on the lists screen`.
+Tests: `NavigationRepositoryTest` (3), and the UI tests `doubleTapOnBackArrowLandsOnLists` and `nameWithUrlCharactersSurvivesNavigation`.
 
 ---
 
-## 2. Tasks screen mode × input buffer (explicit `UiState` + implicit text buffer)
+## 2. Text input (implicit)
 
-`M/presentation/view/tasks/viewmodel/TasksViewModel.kt`, `M/presentation/view/tasks/layout/TasksScreen.kt`, `M/presentation/common/AddTextField.kt`
+`M/presentation/common/AddTextField.kt`, `CommonUi.kt` (`TextInputDialog`)
 
-State = (`uiState ∈ {Normal, Edit}`, `newTaskMessage: String`, the text the field displays).
+There are three independent text buffers, and none of them shares state with another:
+
+| Buffer | Owner | Cleared when |
+|---|---|---|
+| New list name | `ListsViewModel.newListName` | the create action takes it, before the insert; it is put back if the insert fails |
+| New task text | `TasksViewModel.newTaskMessage` | the same: taken before the insert, put back on failure |
+| Rename / edit item / join code | the dialog's own `remember` state | the dialog closes |
 
 Invariants:
-* **T-INV1:** the field displays exactly `newTaskMessage`, so what the user sees is what gets submitted. This now holds by construction: `AddTextField` is controlled by `value`.
-* **T-INV2:** in `Normal`, the buffer holds only text the user typed as a task, never the prefilled list name.
-* **T-INV3:** a list name, once stored, is never blank and is trimmed. This matches list creation.
+* **T-INV1:** the add field shows exactly what will be submitted, because it is controlled by `value`.
+* **T-INV2:** a rename never reads or writes the add-task buffer.
+* **T-INV3:** list names are never blank and are trimmed, on create and on rename.
 * **T-INV4:** one submit produces at most one write.
 
-| From | Event | Effect (fixed code) | To |
-|---|---|---|---|
-| Normal, buf | type | `buf = text` | Normal |
-| Normal, buf blank | + (`AddButtonClick`) | `EmptyNewTask` error → snackbar | Normal |
-| Normal, buf | + | `createTask`: take the buffer, clear it, insert; on error put it back if still empty (`TasksViewModel.kt:221`) | Normal, "" |
-| Normal, buf | ✎ (`ChangeUiState(Edit)`) | the screen effect prefills `buf = current list name` (`TasksScreen.kt:221`) and requests focus | Edit, name |
-| Edit, buf | type | `buf = text` | Edit |
-| Edit, buf blank | + (`UpdateListName`) | `EmptyListName` error (`TasksViewModel.kt:90`) | Edit |
-| Edit, buf | + | `updateListName`: check `trim()` again, write, clear, `Normal` (`TasksViewModel.kt:292`) | Normal, "" |
-| Edit, buf | system back | `changeState(Normal)` **clears buf** (`TasksViewModel.kt:314`) | Normal, "" |
-| Edit | ← arrow | navigate back; the ViewModel is destroyed with its entry | — |
+| From | Event | Effect |
+|---|---|---|
+| add field, blank | + (or keyboard Done for list names) | "List name cannot be empty." / "Type something first." snackbar |
+| add field, text | + (or keyboard Done for list names) | take the text, clear the field, insert. Item text can span lines: Enter adds a new line there. Test: `multiLineItemsKeepTheirLinesWhenAddedAndEdited` |
+| Tasks | ✎ | rename dialog opens, prefilled with the current name, with focus in the field; Save is disabled while blank |
+| rename dialog | Save | `RenameList(name)`: validated, trimmed, written; the title updates from Room |
+| rename dialog | Cancel or back | nothing changes |
+| item row | tap | ticks or unticks it |
+| item row | press and hold | edit dialog with the item's text, plus a short vibration; Save sends `EditItem(task, text)`: blank, too long or unchanged text writes nothing |
+| list card | press and hold | rename dialog for that list (`ListsViewModel.Command.RenameList`) |
 
-### Bugs
+**Fixed:**
+* **T1:** cancelling a rename created a task named after the list. The old shared buffer (Edit mode) is gone, so this can't happen by construction.
+* **T2:** a draft task was lost when starting a rename.
+* **T3:** a blank list name was accepted.
+* **T4 and L1:** a double tap on + inserted twice.
+* **T5:** rotating during a rename reset the edit to a stale name. Edit mode no longer exists.
+* **F1 (feature pass):** opening the rename or join dialog crashed the app with "FocusRequester is not initialized". Focus was requested before the dialog window had composed its field. The request now lives inside the dialog's own composition.
 
-**T1: cancelling a rename turned the list name into a task. FIXED, issue 2. Severity: high (creates data the user never typed, every time).**
-* Evidence: originally `AddTextField` held `remember { TextFieldValue(value) }` without a key, so it never showed later changes to `value`. The Edit prefill wrote into the ViewModel's buffer, but the field still looked empty. The `Normal` branch of the effect was the no-op expression `viewModel.newTaskMessage.value`.
-* Repro: ✎ → back → + on the empty-looking field creates a task named after the list.
-* Fix: a controlled text field, and clearing the buffer on Edit→Normal.
-* Tests: `TasksViewModelTest.cancelling edit does not turn the prefilled list name into a task`, and the UI test `cancellingRenameDoesNotCreateTaskNamedAfterList`. On the original code that UI test fails with `expected:<Groceries> but was:<>`, which is the field/buffer divergence itself.
-
-**T2: a draft was silently replaced by the list name. FIXED, issue 2. Severity: medium.**
-* Repro: type "milk", ✎, +. The field showed "milk", but the rename used the old name, so nothing changed and "milk" was lost.
-* Fixed by T-INV1: the field now shows the prefilled name.
-* Covered by the same UI test, which asserts the field shows the name in Edit.
-
-**T3: a blank list name was accepted. FIXED, issue 2. Severity: medium.**
-* Evidence: originally `Command.UpdateListName` had no validation and `updateListName` did no `trim`, while `ListsViewModel` rejects blank names on create.
-* Repro: ✎, clear the field, +. The list gets the name `""`.
-* Tests: `TasksViewModelTest.blank rename is rejected`, and `second queued rename does not blank the list name`. The second test covers the double-tap form: the first rename clears the buffer, then the second rename, which passed validation earlier, used to write `""`.
-
-**T4: a double tap on + created duplicate tasks. FIXED, issue 2. Severity: medium.**
-* Evidence: originally the buffer was cleared only after the insert returned. A second `CreateTask` that ran before that point read the same text.
-* Fix: take the text and clear the buffer before suspending.
-* Test: `TasksViewModelTest.two create actions queued before the insert finishes insert once`.
-* Test: `failed insert gives the text back` checks that the new early clear cannot lose text when the insert fails.
-
-**T5: rotation while in Edit resets the edit to the stale name. OPEN. Severity: low.**
-* The uiState effect starts again on recomposition and prefills `listData.value.name`. `listData` is `collectAsState(initial = list)`, and `list` is the navigation-time snapshot.
-* Result: after a rename in this session, a rotation in Edit prefills the old name and discards what was typed.
-* Fix if needed: move the prefill into `changeState(Edit)`, using a name held by the ViewModel.
+Tests: `TasksViewModelTest` (rename ×3, edit item ×2, create ×2, too long ×1), `ListsViewModelTest` (create, rename), and the UI tests `renameHappensInADialogAndNeverLeaksIntoTheAddField` (it found F1), `pressAndHoldAnItemEditsItsText`, `pressAndHoldAListRenamesIt` and `multiLineItemsKeepTheirLinesWhenAddedAndEdited`.
 
 ---
 
-## 3. Lists screen input buffer (implicit)
+## 3. Lists screen (implicit)
 
-`M/presentation/view/lists/viewmodel/ListsViewModel.kt`
+| Event | Effect |
+|---|---|
+| Tap a card | opens the list |
+| Press and hold a card | rename dialog |
+| Swipe a card past 60% of its width | the card springs back and a dialog asks first: **Delete** for a local list, **Leave** for a shared one |
+| Confirm | `DeleteList`; a shared list is left instead (§8) |
+| Drag the handle | the visible order changes live; the drop saves positions (§9) |
+| Join list | the join dialog opens (§8) |
 
-States: `newListName` (now `mutableStateOf`, so the controlled field recomposes).
-
-| From | Event | Effect | To |
-|---|---|---|---|
-| buf blank | + | `EmptyListName` error | buf |
-| buf | + | `createList`: `trim`, check, clear, insert; on error put it back if still empty (`ListsViewModel.kt:84`) | "" |
-
-**L1: a double tap on + created duplicate lists. FIXED, issue 2.** This has the same mechanism as T4. Test: `ListsViewModelTest.two create actions queued before the insert finishes insert once`.
+Each card shows the name, a shared icon, "x of y ticked", and a progress bar. All of it comes from a single Room query (`ListDao.getAllLists`, which returns `ListWithProgress`).
 
 ---
 
-## 4. Persisted data: list and task lifecycles (Room)
+## 3b. List screen and its ⋮ menu (implicit)
+
+`M/presentation/view/tasks/layout/TasksScreen.kt`, `TaskRow.kt`
+
+| Event | Effect |
+|---|---|
+| Tap an item | ticks or unticks it |
+| Press and hold an item | edit dialog (§2) |
+| Swipe an item past 60% | deletes it, with Undo (§6) |
+| Drag the handle | reorder (§9) |
+| ✎ | rename dialog (§2) |
+| 👤+ (only when Firebase is configured) | share (§8) |
+
+The first ⋮ entry is a small state machine driven by the items on screen:
+
+| State | Condition | Entry shown | Tap |
+|---|---|---|---|
+| SomeTicked | at least one item ticked | **Uncheck all** | confirm dialog "Uncheck everything?" (the ticked count is in the text). Cancel changes nothing. Confirm unticks every item → NoneTicked |
+| NoneTicked | items exist, none ticked | **Check all** | ticks every item at once, without a dialog → SomeTicked |
+| Empty | no items | neither entry | — |
+
+The second entry is always **Delete everything**, which asks first.
+
+* **Invariant:** progress (ticks) is never lost on a single tap. Unticking everything always goes through a dialog.
+* Both entries write one value to every item: `TaskRepository.setAllTasks(listId, checked)`, a single `UPDATE` in Room or one Firestore batch for a shared list. Repeating either is harmless.
+
+Tests: `TasksViewModelTest.check all ticks every item in this list`, the refresh test, and the UI test `uncheckAllAsksFirstThenTheMenuOffersCheckAll`. The UI test covers Cancel keeping the tick, Confirm unticking, the entry flipping to "Check all", and Check all ticking.
+
+---
+
+## 4. Persisted data (Room v4)
 
 `M/data/model/*.kt`, `M/data/room/**`
 
 ```
-List:  (absent) ─create─► Live(name≠blank) ─rename─► Live ─delete─► Deleted ⇒ cascade-deletes its tasks
-Task:  (absent) ─create(list Live)─► Unchecked ⇄ Checked ─delete─► (absent)
-       Unchecked/Checked ─refresh(list)─► Unchecked      ─clear(list)─► (absent)
+List:  (absent) ─create─► Local ─share─► Shared(remoteId) ─leave─► (absent here; it stays for the others)
+       Local ─delete─► (absent)  ⇒ cascade-deletes its tasks
+Task:  (absent) ─create─► Unchecked ⇄ Checked ─delete─► (absent) ─undo─► restored with the same id and position
+       any ─edit text─► same state, new message    all items ─Check all / Uncheck all (confirmed)─► all Checked / all Unchecked
 ```
 
-Invariants:
-* **D-INV1:** every task belongs to a live list. The FK uses `CASCADE`, and inserting a task into a missing list fails the FK check and shows the error snackbar.
-* **D-INV2:** list names are non-blank (T3).
-* **D-INV3:** the UI feed equals the latest Room emission (see §5).
+Columns added in v4: `position` (both tables) and `remote_id` (both tables).
 
-| Transition | Trigger | Code |
-|---|---|---|
-| List create | Lists + | `ListDao.insert` |
-| List rename | Tasks ✎ + | `ListDao.update` (an optimistic UI update follows, see E2) |
-| List delete | swipe a list row ≥ 500 px | `ListDao.delete`; tasks cascade |
-| Task create / delete | Tasks + / swipe a task row | `TaskDao.insert` / `delete` |
-| Task check ⇄ uncheck | checkbox | the item is mutated in place (`TasksScreen.kt:179`), then `TaskDao.update` |
-| Refresh | ↺ | `TaskDao.resetAllTasks` (now `suspend`) |
-| Clear | 🗑 (no confirmation) | `TaskDao.clearAllTaskFromList` |
+**Migration 3→4** (`TaskDatabase.MIGRATION_3_4`):
+* It adds the columns, then seeds `position` from the old ids, which keeps today's insertion order.
+* Before this, the database used `fallbackToDestructiveMigration()` with no migrations, so a version bump would have **wiped every user's data**.
+* The schema is now exported to `app/schemas/` for future migrations.
+* `fallbackToDestructiveMigration()` is removed. Git history shows v3 is the oldest schema ever shipped, so there is no older version to fall back from. A future migration that is forgotten now crashes in testing instead of silently deleting live users' lists.
+* **Rule for future changes:** bump `version`, add a `Migration`, and add a case to `MigrationTest`.
+
+Invariants:
+* **D-INV1:** every task belongs to a live list (foreign key with CASCADE).
+* **D-INV2:** equality covers every column. All columns are constructor properties of the data classes.
+* **D-INV3:** list and task order comes from `position`, with `id` as the tiebreaker.
+
+**Fixed:**
+* **D1:** a fast double tap on a checkbox could lose a toggle.
+  * Now the row shows the new state at once, through `remember(task.state)` local state.
+  * It sends a *new* row with `task.copy(state = ...)` instead of mutating Room's object.
+  * Test: `checking a task writes a new row and leaves the shown one alone`.
+* **D2:** opening a list that was being deleted crashed the app with an NPE.
+  * Now `getListData` navigates back when the row disappears.
+  * Test: `list deleted while its screen is open...`.
+* **D3 (feature pass): reachable now.**
+  * `id`, `position` and `remoteId` were declared in the class body, so `equals()` ignored them. StateFlow and Compose drop values that are `==` to the current one, so a list that only gained a `remoteId` kept looking unshared, and a reorder could be dropped.
+  * Found by `SharedListSyncTest`: the "Shared list" label never appeared.
+  * Fix: those fields moved into the constructors. The schema stays the same, and `copy()` now keeps ids, which also removes the old trap where `copy()` reset `id` to 0.
+* **M1:** existing users would lose all their data on the version bump. The migration above fixes this. Test: `MigrationTest`, which builds the exact v3 schema Room generated, fills it, and migrates without any destructive fallback.
 
 ### Retries and repeated delivery
 
-Nothing in the app retries automatically: no repository, use case or ViewModel has a retry loop. A repeat happens in only two ways:
-* The user taps again, usually after an error snackbar.
-* A command waits suspended in a channel `send` while no screen collects it, and runs later (see §0).
+Nothing in the app retries a write automatically. Firestore queues writes to shared lists itself and sends them when the device is back online. Only the sync *listeners* retry (§8).
 
 | Write | Safe to repeat? | User retry after a failure |
 |---|---|---|
-| Create list / task | One write per submit (L1, T4). A deliberate second submit is a second item, by design | The text is put back in the field, so tapping + again retries |
-| Rename list | Writing the same name twice is harmless; blank names are guarded (T3) | The buffer is already cleared and the UI shows the new name (E2), so the user has to type it again |
-| Delete list / task | Yes: `@Delete` on a missing row affects 0 rows | Swipe again |
-| Check / uncheck | Last write wins, and writes stay in order (Room's serial executor). See D1 for the lost-toggle window | Tap again |
-| Refresh / clear tasks | Yes: both statements are idempotent | Tap again |
-| Navigate to list / back | Yes, now (N1, N2) | — |
-
-The one harmful case of a deferred `send` being delivered later was the leaked feed collectors (S1). A deferred swipe-delete that is delivered after the user has opened that list is now handled by D2's navigate-back path.
-
-**D1: the checkbox state is mutated in place. A double tap can lose a toggle. OPEN. Severity: low.**
-* `item.state = it` writes a plain field, not snapshot state, so the checkbox does not redraw until Room emits again.
-* A second tap inside that window (a few ms) sends `true` again instead of `false`.
-* Do not fix this with `item.copy(state = ...)`. `Task.id` is declared in the class body, so `copy()` resets it to 0 and the update affects no row.
-
-**D2: the tasks screen for a deleted list crashed the app (NPE). FIXED. Severity: high (crash).**
-* Evidence: `ListDao_Impl.getList` (generated code) emits `null` when there are no rows, even though the declared type was `Flow<TaskList>` (non-null). `TasksScreen.kt:91` then dereferenced `listData.value.name`.
-* Repro, confirmed on the emulator with the code before this fix:
-  1. Swipe a list row past 500 px.
-  2. Within the 500 ms dismiss animation, tap the part of the row still on screen.
-  3. The tap opens the tasks screen, and `onItemSwiped` (`TaskListListElement.kt:173`) deletes the list.
-  4. Result: `FATAL EXCEPTION ... TaskList.getName() on a null object reference at TasksScreen.kt:91`.
-* The N2 guard does not block this, because the navigation happens before the delete.
-* Fix:
-  * `getList` is typed `Flow<TaskList?>` through the DAO, repository and use case. Return-type nullability does not change the schema.
-  * `getListData` navigates back on `null` instead of publishing it (`TasksViewModel.kt:210`).
-* Tests:
-  * `TasksViewModelTest.list deleted while its screen is open navigates back instead of showing null`
-  * UI test `StateMachineRegressionTest.tapDuringSwipeDismissReturnsToLists`: it crashed the process before the fix and passed 2 out of 2 runs after it.
-
-**D3: `TaskList` equality ignores `id`. OPEN, latent.**
-* `id` is declared in the class body, so `data class` equality compares only `name`. Compose `State` and `StateFlow` both drop a new emission that is `==` to the current one.
-* If Room coalesced a delete and a re-create of the same name into one emission, the row would keep the old object, whose id no longer exists. Opening it now lands in D2's navigate-back path instead of crashing.
-* Not reachable at human speed. Moving `id` into the constructor would not change the schema, but it changes every constructor call and `copy()` call site.
+| Create list / task | one write per submit | the text is put back in the field |
+| Rename | the same value written twice is harmless | the dialog opens with the current name |
+| Edit item text | yes: unchanged text writes nothing, and the same text twice is harmless | press and hold again |
+| Delete task | yes, and Undo restores the same id and position | swipe again |
+| Delete / leave list | yes | swipe again |
+| Check / uncheck | last write wins | tap again |
+| Uncheck all / check all / delete all | yes: each sets the same value on every item | menu again |
+| Reorder | yes: it writes the full order | drag again |
+| Join | yes: `arrayUnion` | the dialog again |
 
 ---
 
-## 5. Feed subscription lifecycle (implicit)
+## 5. Feed subscriptions (implicit)
 
-`ListsViewModel.getTaskList`, `TasksViewModel.getTasks`, `TasksViewModel.getListData`
+| Feed | Source | Guard |
+|---|---|---|
+| Lists screen | `ListDao.getAllLists` → `StateFlow` | `feedJob`: one collector per ViewModel |
+| Tasks | `TaskDao.getAllTasksFromList` → `StateFlow` | `tasksJob` |
+| List title and shared flag | `ListDao.getList` → `StateFlow<TaskList?>` | `listJob` |
+
+**Fixed:**
+* **S1:** a new collector started on every return to the lists screen, and the old ones were never stopped.
+* **S2:** refresh could overwrite newer state with a stale snapshot.
+* **S3:** a list-data collector was added on every rotation. Fixed by the `StateFlow` and the guard.
+
+Tests: the ViewModel subscription and refresh tests.
+
+---
+
+## 6. Swipe rows (Material 3 `SwipeToDismissBox`)
+
+| Row | Released past the threshold | Afterwards |
+|---|---|---|
+| List card | the card springs back and the confirm dialog opens | nothing is deleted until the user confirms |
+| Task row | dismissed, task deleted | an "Undo" snackbar shows for the long duration; Undo re-inserts the task with the same id and position |
+
+"Past the threshold" means **60% of the row's width** (`rememberDeliberateSwipeState` in `CommonUi.kt`).
+* Material's default is a fixed 56 dp, which an accidental brush reaches.
+* Material also dismisses on a quick flick of any length, so the distance is checked again in `confirmValueChange`.
+* The background stays muted until the swipe is far enough, then turns the delete colour, so it is visible when letting go will delete.
+
+Test: `aShortOrQuickSwipeDoesNotDelete`.
+
+The undo snackbar runs in the **screen's** coroutine scope. A row's own scope ends when the row is removed, which would cancel the snackbar.
+
+Tests:
+* UI: `swipingAListAsksBeforeDeleting`, `deletedTaskComesBackWithUndo`.
+* The existing `DeleteListTest` now confirms the dialog.
+
+---
+
+## 7. Errors (implicit)
+
+`handleError` sets `errorMessage`, and a long snackbar shows it. Every error now has a specific message:
+* empty name or item
+* item too long (over 1000 characters, the shared-list limit)
+* invalid join code
+* join failed
+* share failed
+* "Something went wrong" for anything else
+
+Load errors in `getTasks` and `getListData` are now reported instead of swallowed (formerly E3). A rename is no longer optimistic: the title only changes when Room changes (formerly E2).
+
+---
+
+## 8. Shared lists: local ⇄ Firestore (new)
+
+`M/data/remote/SharedListsRemote.kt`, `M/data/sync/SharedListsSync.kt`, `M/data/sync/MirrorPlan.kt`, `firebase/firestore.rules`
+
+**Model:**
+* Firestore stores `lists/{code}` as `{name, members:[uid]}` and `lists/{code}/tasks/{id}` as `{message, state, position}`.
+* The 20-character random document id is the join code.
+* Each person uses an anonymous Firebase account, so there is no sign-in screen. The account persists across launches.
+
+**Single source for the UI:** the screens read only Room.
+* Writes to a shared list go **only to Firestore**.
+* `SharedListsSync` mirrors Firestore snapshots back into Room.
+* Firestore applies writes to its local cache immediately, so the mirror also updates the UI while offline.
+* Writing to Room as well would race the mirror and could insert a task twice.
 
 ```
-NotSubscribed ─(screen LaunchedEffect)─► Subscribed(Room collector in viewModelScope) ─(VM cleared)─► Cancelled
+Local ─Share─► [Room: remoteId set] ─► [Firestore batch: list+tasks, pending] ─server ack─► Shared(confirmed)
+(absent) ─Join(code)─► arrayUnion(me) awaited ─► myLists snapshot ─► mirror inserts list ─► tasks listener
+Shared ─Leave─► markLeft(code) + arrayRemove(me) + delete locally
+Shared ─removed elsewhere / list gone─► mirror deletes local copy (only if seen before)
 ```
 
 Invariants:
-* **S-INV1:** at most one Room collector per feed per ViewModel.
-* **S-INV2:** when the screen is re-entered, it shows the latest feed without waiting for a new DB change.
-* **S-INV3:** only the subscription writes the feed.
+* **R-INV1:** every shared list has exactly one local row (keyed by `remote_id`), and every remote task has exactly one local task row.
+* **R-INV2:** a list shared a moment ago is never deleted by an older snapshot. Deletion requires the id to be in `seen`, and only ids **confirmed by the server** are added to `seen`.
+* **R-INV2b:** a share is all or nothing. `createList` is awaited; if the server refuses it, `shareList` clears the `remoteId`s again in one transaction, so the list stays local and intact.
+* **R-INV2c:** task text is at most 1000 characters, the same limit as the rules. Otherwise a long task in a shared list would appear and then vanish.
+* **R-INV3:** a list that was just left is never re-inserted by an older snapshot. Lists in `left` are ignored until the user joins that list again (`markJoined`).
+* **R-INV4:** a tasks listener starts only when the list is `confirmed`, meaning the server has it and not just the local cache.
+* **R-INV5:** a listener that fails is retried every 5 s while its list is still in `myLists`.
 
-| Event | Original | Fixed |
+| Transition | Code | Order matters because… |
 |---|---|---|
-| Lists screen entered (first time, back from Tasks, rotation) | `LaunchedEffect(Unit)` started **another** permanent collector each time and sent into a rendezvous `Channel` | the second and later calls return early (`ListsViewModel.kt:118`); the feed is a `StateFlow`, so it replays to the new screen |
-| Tasks screen effect restarts (rotation) | another `getTasks` collector | early return (`TasksViewModel.kt:182`) |
-| Refresh | reset, then `getTasks().first()` written to `_feedList` on `Dispatchers.IO`, racing the collector | reset only; the collector's re-emission updates the feed (confirmed on device by `refreshUnchecksTasksThroughTheRoomSubscription`) |
+| Share | `ListRepository.shareList` | Room gets the `remoteId`s *before* the Firestore batch. Otherwise the snapshot arrives first and the mirror inserts duplicates |
+| Join | `ListRepository.joinList` | the write is awaited (15 s timeout) so the user gets a clear success or failure |
+| Leave | `ListRepository.deleteList` | `markLeft` comes first (R-INV3) |
+| Task writes | `TaskRepository.*` | each write chooses Room or Firestore by the list's `remoteId`; a check sends only `state` and an edit only `message`, so two people editing different fields don't overwrite each other |
+| Reorder | `TaskRepository.reorderTasks` | Room *and* Firestore are written, so the drop shows at once. This is safe because it updates existing rows only |
 
-**S1: collectors leaked on every return to the lists screen. FIXED, issue 3. Severity: medium (unbounded growth during a session).**
-* Each leaked collector re-ran the query on every DB change.
-* Collectors from earlier visits stayed suspended in `send` with old snapshots and delivered them when the screen came back.
-* A plain "already started" guard on the original `Channel` would have left the screen empty after returning, because channels do not replay. That is why the feed became a `StateFlow`.
-* Tests: `ListsViewModelTest.returning to the screen reuses the subscription and still shows the lists`, and `TasksViewModelTest.restarting the screen effect keeps one task subscription`.
+**Fixed during the feature pass:**
+* **R1: a just-shared list's tasks never synced.**
+  * Cause: the `myLists` snapshot included the list while it was still pending. The tasks listener started at once, and the server rejected it with `PERMISSION_DENIED` because the list didn't exist there yet. Firestore then stopped that listener for good.
+  * Fix: R-INV4 (listen with `MetadataChanges.INCLUDE` and wait for `confirmed`), plus R-INV5.
+  * Found by `SharedListSyncTest`.
+* **R2: sharing a list with tasks was rejected by the rules.**
+  * Cause: task rules used `get()`, which sees the database *before* the batch, so the list didn't exist yet.
+  * Fix: write rules use `getAfter()`.
+  * Test: rules test `sharing: the list and its tasks can be created in one batch`.
 
-**S2: refresh could overwrite newer state with a stale snapshot. FIXED, issue 3. Severity: low.**
-* Scenario: the snapshot is read right after the reset, the user checks a task, the collector emits it as checked, and then the refresh writes the older snapshot. The UI then shows the task unchecked while the DB has it checked.
-* Test: `TasksViewModelTest.refresh leaves the feed to the subscription`.
+* **R6: a share the server refused deleted the list and all its tasks.**
+  * Sequence: `remoteId` was set in Room, and the batch was sent without waiting. The pending doc appeared in the cache, and its id was added to `seen`. The server refused the batch and the doc left the cache. The mirror then treated it as "deleted elsewhere" and deleted the list, which cascaded to its tasks.
+  * Realistic triggers: Firestore created before the rules are deployed, or a task over 1000 characters.
+  * Fix: R-INV2, R-INV2b and R-INV2c.
+  * Test: `SharedListSyncTest.aShareTheServerRejectsLeavesTheListLocalAndIntact`.
+* **R7: after leaving, joining the same list again showed nothing until the app restarted.** The `left` set was never cleared.
+  * Fix: `markJoined` in `joinList`.
+  * Test: `joiningUnderTheRealRulesThenLeavingAndRejoining`. This is also the first test of the joiner's side under the real rules.
 
-**S3: `getListData` still starts a collector per rotation. OPEN. Severity: low.** It sends into a rendezvous `Channel`, so a guard alone would leave the title stale after rotation. The fix is the same as for the lists feed: a `StateFlow<TaskList?>`.
+**Security rules** (`firebase/firestore.rules`, 9 tests in `firebase/test/rules.test.mjs`):
+* Signed-out users can do nothing.
+* Creating a list is allowed only with yourself as the sole member.
+* Queries return only your own lists.
+* Reading a single list by its code is allowed; that is how joining works.
+* A non-member may only add *themselves* to `members`.
+* A member may rename the list or remove themselves. A member cannot remove others or delete the list.
+* Tasks are readable and writable only by members, and must have the right shape: message ≤ 1000 characters, a bool state, an int position.
+
+**OPEN:**
+* **R3: no way to revoke a code.**
+  * Anyone with the code can join, and members can't remove others.
+  * A list nobody belongs to any more stays in Firestore as an orphan.
+  * Fix if needed: an owner field, member removal, or a Cloud Function that cleans up empty lists.
+* **R4: sharing and joining need a connection.** Anonymous sign-in has to reach the server once, and both actions wait for the server's answer. After that, edits work offline.
+* **R8: a slow share can make a duplicate.** If the share times out (15 s) but the server still accepts it later, the list stays local and *also* arrives as a shared copy. Nothing is lost.
+* **R5: the `adhdlist://` link is not clickable in some messengers (WhatsApp).** The recipient can share the message into the app or type the code instead. A tappable `https://` link would need Android App Links on a domain you own.
+
+Tests:
+* `MirrorPlanTest` (3): the Firestore → Room diff.
+* `SharedListSyncTest` (3): two people end to end against the emulator.
+  * Share, upload, a remote add and rename arriving, a local check reaching the cloud, a local edit reaching the cloud with the check intact, and a remote delete arriving.
+  * A rejected share.
+  * Join, leave and rejoin under the real rules.
+* Join codes are read from the text after `join/` or `code:` first, so a 20-character list name in the invite text isn't mistaken for the code. Test: `ListsViewModelTest`.
 
 ---
 
-## 6. Swipe row (implicit, per row; `TaskListListElement.kt`, `TaskListElement.kt`)
+## 9. Reorder (new)
 
-States, from `offset: Animatable` and the `left/rightIconVisibility` flags:
+```
+Idle ─handle drag─► Dragging (VM list reordered live: moveList / moveTask) ─drop─► SaveOrder ─► positions = index
+```
 
-| State | Condition |
+* List order is per device and never synced.
+* Task order is shared: Room and Firestore are both written.
+* A remote order change while someone is dragging is overwritten by that person's drop. Last drop wins.
+
+Tests:
+* `drag then drop saves the new order` (both ViewModels).
+* UI `dragHandleReordersTasksAndTheOrderIsSaved`: drags with the real handle, leaves the screen and comes back, then checks the order is loaded from the database.
+
+---
+
+## 10. Design decisions for AuDHD (what changed and why)
+
+| Decision | Why |
 |---|---|
-| Idle | offset 0 |
-| Dragging(dir) | a drag is in progress; the background icon side is set on drag start |
-| Settling | released at \|offset\| < 500 → animate to 0, clear the flags |
-| Dismissing | released at \|offset\| ≥ 500 → animate to ±1200 → `onItemSwiped()` → snap to 0 |
-
-| From | Event | To |
-|---|---|---|
-| Idle | drag | Dragging |
-| Dragging | release, \|x\| < 500 | Settling → Idle |
-| Dragging | release, \|x\| ≥ 500 | Dismissing → delete → Idle (the row goes when Room emits) |
-| Dismissing | new drag (`snapTo` cancels `animateTo`) | Dragging; **the delete never fires**, which works as an "undo by grabbing" |
-
-**NOT A BUG / cosmetic:**
-* The lists `LazyColumn` has no `key` (`ListsScreen.kt:79`), so the next row inherits the slot's icon flags after a delete.
-* Dismiss does not reset the flags.
-* Both are invisible because the foreground row is opaque (`surfaceContainer` background).
-* The tasks list is keyed by `task.id`.
-* After `onItemSwiped`, the dismissed row snaps back into view until Room removes it. This causes a brief flash, and it is what makes D2's tap window possible.
+| The original ADHD List palette: yellow (#FDD835) top bar, + buttons and checkboxes with near-black content (≈13:1 contrast), neutral grey surfaces; progress bars use a deeper gold in light mode, where plain yellow on grey is hard to see; no wallpaper-based colors | familiar to existing users; the app looks the same every time |
+| Larger text and line height | easier to scan |
+| A progress bar and "x of y ticked" on every list and at the top of each list; "All ticked. Nice work." | visible progress gives motivation without noise |
+| The whole item row toggles the checkbox; press and hold edits (with a short vibration); 48 dp handles; a 56 dp + button. Items can span several lines, so Enter adds a new line and + adds the item; keyboard Done adds list names | big, forgiving tap targets; one gesture per meaning (tap ticks, hold edits) |
+| Confirm before deleting or leaving a list; Undo after deleting an item; "Delete everything" asks first; swipe-to-delete only fires past 60% of the row | mistakes can be undone and nothing destructive happens by surprise |
+| Text-labelled overflow menu instead of unlabeled icons. One entry flips between "Uncheck all" (shown while anything is ticked; asks first, because it throws away progress) and "Check all" (shown once nothing is ticked). "Delete everything" also asks first | clear meaning, no guessing; nothing that loses progress happens on one tap |
+| On-screen words say "item" / "something", never "task" | it is a list for anything (shopping, packing, things to remember), not only to-dos. Code still calls rows `Task` |
+| Short fades instead of 500 ms slides | movement that is easy to follow |
+| Long snackbars | enough time to read and react |
 
 ---
-
-## 7. Error / snackbar state (implicit)
-
-`errorMessage` is a plain var that `handleError` sets before `showSnackbar(errorMessage)`.
-
-* **E1: `UnknownError` showed an empty or stale message. FIXED (two lines, no test; only reachable on a DB failure).** Originally the branch only logged, so the snackbar showed `""` or the previous "cannot be empty" text. It now sets "Something went wrong."
-* **E2: rename is optimistic without rollback. OPEN, low.** `updateListName` changes the in-memory list, publishes it to the title and leaves Edit before it checks the result. On failure the title shows a name the DB does not have, until the next emission.
-* **E3: load errors are swallowed. OPEN, low.** The `Error` branches in `getTasks` and `getListData` construct `Error.UnknownError(...)` and drop it.
-
----
-
-## Issue groups and fix status
-
-| Issue | Machines | Bugs | Status |
-|---|---|---|---|
-| **1. Navigation transitions must be idempotent** | §1 | N1 (high), N2, N3 | FIXED in `NavigationRepository` |
-| **2. Input buffer is the single source of truth; submits are idempotent** | §2, §3, §7 | T1 (high), T2, T3, T4, L1, E1 | FIXED in `AddTextField`, both ViewModels |
-| **3. One subscription per feed; only it writes the feed** | §5 | S1, S2 | FIXED; S3 OPEN |
-| **4. A screen must survive its list being deleted** | §4 | D2 (crash) | FIXED in `ListDao`, `ListRepository`, `GetListUseCase`, `TasksViewModel.getListData` |
-| 5. Follow-ups (not fixed) | §2, §4, §5, §7 | T5, D1, D3, S3, E2, E3 | OPEN |
-
-Supporting change: `resetAllTasks` is now `suspend` through the DAO, the repository and the use case. That lets refresh run on `viewModelScope` without `Dispatchers.IO`. Room still runs it off the main thread.
-
-Constraint for future fixes: do not change the entities. The DB is at `version = 3` with `fallbackToDestructiveMigration()`. A schema change without a version bump crashes the app, and a version bump wipes user data.
-
-## Verified non-bugs
-
-* `LIKE :list_id` on integer columns: no wildcards, so it behaves as `=`.
-* `TaskDatabase.getInstance` is unsynchronized, but both repositories are Hilt singletons built on the main thread.
-* Suspend writes go through Room's serialized transaction executor, so toggles stay in order.
-* The cascade FK from tasks to lists is correct.
 
 ## Tests
 
-* JVM, `./gradlew :app:testDebugUnitTest`: `NavigationRepositoryTest` (3), `TasksViewModelTest` (8), `ListsViewModelTest` (2), plus the original 2.
-  * 9 of the first 10 navigation and tasks tests failed on the original code. The tenth, `failed insert gives the text back`, guards the new behavior.
-  * The D2 test was added after the fix. The UI repro covers the failure on the old code.
-  * `ListsViewModelTest` does not compile against the original code, because its feed was a `Channel`.
-* Instrumented, `./gradlew :app:connectedDebugAndroidTest`, run on the `Pixel_6_API_30` emulator: `StateMachineRegressionTest` (5), plus the existing suite.
-  * `nameWithUrlCharactersSurvivesNavigation` checks that the whole-JSON route encoding (N3 fix) round-trips `50% a/b "c" & d?#`.
-  * This needed `utils/CustomTestRunner.kt`. `build.gradle.kts` already referenced that class but it did not exist, so no instrumented test could run before.
-  * Both bug tests (`cancellingRename...`, `doubleTapOnBackArrow...`) fail on the original code.
-* Known harness flake, not caused by these fixes: `BaseUiTest` clears the DB in `@Before`, but `createAndroidComposeRule` has already launched the activity. The first frame can therefore show the previous test's rows. `DeleteListTest` failed once in a full-suite run this way and passed 4 out of 4 runs on its own.
-* Not covered by any test: D1, E2, and the swipe-row machine apart from the D2 path.
+* **JVM**, `./gradlew :app:testDebugUnitTest`: 29 tests. `TasksViewModelTest` (14), `ListsViewModelTest` (7), `MirrorPlanTest` (3), `NavigationRepositoryTest` (3), `ExampleUnitTest` (2).
+* **Instrumented**, `./gradlew :app:connectedDebugAndroidTest`: 18 tests.
+  * `StateMachineRegressionTest` (11), `SharedListSyncTest` (3), `MigrationTest`, the existing `DeleteListTest` and `DeleteTaskTest`, plus the template `ExampleInstrumentedTest`.
+  * Run them on an emulator only (`ANDROID_SERIAL=emulator-5554`). They clear the app's data and uninstall it on **every** connected device, including a plugged-in phone.
+  * `SharedListSyncTest` runs only with `-PfirebaseEmulatorHost=10.0.2.2` and `npm run emulators`; otherwise it is skipped.
+  * The test APK excludes Espresso's old `protobuf-lite`, which otherwise shadows Firestore's protobuf and crashes the run.
+* **Security rules**, `cd firebase && npm test`: 9 tests.
+* **Harness flake (fixed):** `BaseUiTest` cleared the DB after the activity had started, so a test could tap the previous test's stale row. Now a rule ordered before the activity rule clears it first.
+* **Emulator isolation:** with `firebaseEmulatorHost` set, the app uses a separate named Firebase app for the `demo-adhdlist` project, even when `google-services.json` is present. Test data can't reach the real project.
+* **Real Firebase:** the automated sync tests run only against the local emulator. Sharing on the real `adhdlist` project was checked by hand: a phone and an emulator shared "Ćwiczenia".
+* **Not covered:** rotation, TalkBack, and accessible reordering. The drag handle has a content description but no accessibility actions, so screen-reader users can't reorder yet.

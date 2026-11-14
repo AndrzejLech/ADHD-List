@@ -1,5 +1,6 @@
 package com.example.adhdlist
 
+import com.example.adhdlist.data.model.ListWithProgress
 import com.example.adhdlist.data.model.TaskList
 import com.example.adhdlist.data.room.list.ListRepository
 import com.example.adhdlist.domain.database.lists.GetListsUseCase
@@ -23,7 +24,7 @@ class ExampleUnitTest {
     @Test
     fun `getListUseCase returns data on result success`() = runTest {
         // Arrange
-        val fakeTaskFlow = flowOf(mutableListOf(TaskList(name = "test")))
+        val fakeTaskFlow = flowOf(mutableListOf(ListWithProgress(TaskList(name = "test"), total = 0, done = 0)))
         val fakeResult = Result.Success(fakeTaskFlow)
         coEvery { listRepositoryMockk.getLists() } returns fakeResult
 

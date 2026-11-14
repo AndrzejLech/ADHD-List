@@ -2,6 +2,8 @@ package com.example.adhdlist.tests
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.swipeRight
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.adhdlist.BaseUiTest
@@ -35,6 +37,9 @@ class DeleteListTest : BaseUiTest() {
                     performTouchInput {
                         swipeRight()
                     }
+                }
+                step("Confirm deletion in the dialog") {
+                    composeTestRule.onNodeWithText("Delete").performClick()
                 }
                 step("Assert list is deleted") {
                     assertDoesNotExist()

@@ -16,15 +16,27 @@ interface TaskDao {
     @Update
     suspend fun update(task: Task)
 
+    @Update
+    suspend fun update(tasks: List<Task>)
+
     @Delete
     suspend fun delete(task: Task)
 
-    @Query("UPDATE task_table SET state = 0 WHERE list_id LIKE :list_id")
-    suspend fun resetAllTasks(list_id: Int)
+    @Delete
+    suspend fun delete(tasks: List<Task>)
 
-    @Query("SELECT * FROM task_table WHERE list_id LIKE :list_id")
+    @Query("UPDATE task_table SET state = :state WHERE list_id = :list_id")
+    suspend fun setAllStates(list_id: Int, state: Boolean)
+
+    @Query("SELECT * FROM task_table WHERE list_id = :list_id ORDER BY position, task_id")
     fun getAllTasksFromList(list_id: Int): Flow<MutableList<Task>>
 
-    @Query("DELETE FROM task_table WHERE list_id LIKE :list_id")
+    @Query("SELECT * FROM task_table WHERE list_id = :list_id ORDER BY position, task_id")
+    suspend fun getTasksOnce(list_id: Int): List<Task>
+
+    @Query("SELECT COALESCE(MAX(position), -1) + 1 FROM task_table WHERE list_id = :list_id")
+    suspend fun nextPosition(list_id: Int): Int
+
+    @Query("DELETE FROM task_table WHERE list_id = :list_id")
     suspend fun clearAllTaskFromList(list_id: Int)
 }
