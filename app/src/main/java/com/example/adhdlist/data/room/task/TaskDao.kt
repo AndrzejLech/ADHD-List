@@ -25,8 +25,8 @@ interface TaskDao {
     @Delete
     suspend fun delete(tasks: List<Task>)
 
-    @Query("UPDATE task_table SET state = 0 WHERE list_id = :list_id")
-    suspend fun resetAllTasks(list_id: Int)
+    @Query("UPDATE task_table SET state = :state WHERE list_id = :list_id")
+    suspend fun setAllStates(list_id: Int, state: Boolean)
 
     @Query("SELECT * FROM task_table WHERE list_id = :list_id ORDER BY position, task_id")
     fun getAllTasksFromList(list_id: Int): Flow<MutableList<Task>>

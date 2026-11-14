@@ -109,11 +109,12 @@ class TaskRepository(context: Context, private val remote: SharedListsRemote) {
         }
     }
 
-    suspend fun resetAllTasks(listId: Int): Result<Boolean, Exception>{
+    /** Ticks or unticks every item in the list. */
+    suspend fun setAllTasks(listId: Int, checked: Boolean): Result<Boolean, Exception>{
         return try {
             val listRemoteId = remoteListId(listId)
-            if (listRemoteId == null) taskDao.resetAllTasks(listId)
-            else remote.uncheckAll(listRemoteId, taskDao.getTasksOnce(listId).mapNotNull { it.remoteId })
+            if (listRemoteId == null) taskDao.setAllStates(listId, checked)
+            else remote.setAllStates(listRemoteId, taskDao.getTasksOnce(listId).mapNotNull { it.remoteId }, checked)
             Result.Success(true)
         } catch (e: Exception){
             Result.Error(e)

@@ -174,6 +174,16 @@ class TasksViewModelTest {
     }
 
     @Test
+    fun `check all ticks every item in this list`() = runTest(dispatcher) {
+        collectActions()
+        coEvery { taskRepository.setAllTasks(1, true) } returns Result.Success(true)
+        vm.triggerCommand(Command.CheckAll)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { taskRepository.setAllTasks(1, true) }
+    }
+
+    @Test
     fun `restarting the screen effect keeps one task subscription`() = runTest(dispatcher) {
         every { taskRepository.getTasks(1) } returns Result.Success(MutableStateFlow(mutableListOf()))
         vm.getTasks(1)
@@ -188,13 +198,13 @@ class TasksViewModelTest {
         val live = MutableStateFlow(mutableListOf(Task(1, "milk", state = true).apply { id = 7 }))
         val staleSnapshot = flowOf(mutableListOf(Task(1, "milk", state = false).apply { id = 7 }))
         every { taskRepository.getTasks(1) } returnsMany listOf(Result.Success(live), Result.Success(staleSnapshot))
-        coEvery { taskRepository.resetAllTasks(1) } returns Result.Success(true)
+        coEvery { taskRepository.setAllTasks(1, false) } returns Result.Success(true)
 
         vm.getTasks(1)
         vm.triggerCommand(Command.RefreshTasks)
         advanceUntilIdle()
 
-        coVerify(exactly = 1) { taskRepository.resetAllTasks(1) }
+        coVerify(exactly = 1) { taskRepository.setAllTasks(1, false) }
         verify(exactly = 1) { taskRepository.getTasks(1) }
         assertTrue(vm.feedList.value.single().state)
     }

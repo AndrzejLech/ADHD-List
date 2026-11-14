@@ -125,8 +125,8 @@ class SharedListsRemote(context: Context) {
         tasksRef(listId).document(taskId).delete().logFailure("deleteTask")
     }
 
-    fun uncheckAll(listId: String, taskIds: List<String>) = batch("uncheckAll") { batch ->
-        taskIds.forEach { batch.update(tasksRef(listId).document(it), STATE, false) }
+    fun setAllStates(listId: String, taskIds: List<String>, state: Boolean) = batch("setAllStates") { batch ->
+        taskIds.forEach { batch.update(tasksRef(listId).document(it), STATE, state) }
     }
 
     fun deleteAll(listId: String, taskIds: List<String>) = batch("deleteAll") { batch ->

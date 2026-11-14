@@ -77,7 +77,7 @@ Invariants:
 
 | From | Event | Effect |
 |---|---|---|
-| add field, blank | + or keyboard Done | "cannot be empty" snackbar |
+| add field, blank | + (or keyboard Done for list names) | "List name cannot be empty." / "Type something first." snackbar |
 | add field, text | + (or keyboard Done for list names) | take the text, clear the field, insert. Item text can span lines: Enter adds a new line there. Test: `multiLineItemsKeepTheirLinesWhenAddedAndEdited` |
 | Tasks | ✎ | rename dialog opens, prefilled with the current name, with focus in the field; Save is disabled while blank |
 | rename dialog | Save | `RenameList(name)`: validated, trimmed, written; the title updates from Room |
@@ -94,7 +94,7 @@ Invariants:
 * **T5:** rotating during a rename reset the edit to a stale name. Edit mode no longer exists.
 * **F1 (feature pass):** opening the rename or join dialog crashed the app with "FocusRequester is not initialized". Focus was requested before the dialog window had composed its field. The request now lives inside the dialog's own composition.
 
-Tests: `TasksViewModelTest` (rename ×3, create ×2), `ListsViewModelTest` (create), and the UI test `renameHappensInADialogAndNeverLeaksIntoTheAddField`. That UI test found F1.
+Tests: `TasksViewModelTest` (rename ×3, edit item ×2, create ×2, too long ×1), `ListsViewModelTest` (create, rename), and the UI tests `renameHappensInADialogAndNeverLeaksIntoTheAddField` (it found F1), `pressAndHoldAnItemEditsItsText`, `pressAndHoldAListRenamesIt` and `multiLineItemsKeepTheirLinesWhenAddedAndEdited`.
 
 ---
 
@@ -113,6 +113,36 @@ Each card shows the name, a shared icon, "x of y ticked", and a progress bar. Al
 
 ---
 
+## 3b. List screen and its ⋮ menu (implicit)
+
+`M/presentation/view/tasks/layout/TasksScreen.kt`, `TaskRow.kt`
+
+| Event | Effect |
+|---|---|
+| Tap an item | ticks or unticks it |
+| Press and hold an item | edit dialog (§2) |
+| Swipe an item past 60% | deletes it, with Undo (§6) |
+| Drag the handle | reorder (§9) |
+| ✎ | rename dialog (§2) |
+| 👤+ (only when Firebase is configured) | share (§8) |
+
+The first ⋮ entry is a small state machine driven by the items on screen:
+
+| State | Condition | Entry shown | Tap |
+|---|---|---|---|
+| SomeTicked | at least one item ticked | **Uncheck all** | confirm dialog "Uncheck everything?" (the ticked count is in the text). Cancel changes nothing. Confirm unticks every item → NoneTicked |
+| NoneTicked | items exist, none ticked | **Check all** | ticks every item at once, without a dialog → SomeTicked |
+| Empty | no items | neither entry | — |
+
+The second entry is always **Delete everything**, which asks first.
+
+* **Invariant:** progress (ticks) is never lost on a single tap. Unticking everything always goes through a dialog.
+* Both entries write one value to every item: `TaskRepository.setAllTasks(listId, checked)`, a single `UPDATE` in Room or one Firestore batch for a shared list. Repeating either is harmless.
+
+Tests: `TasksViewModelTest.check all ticks every item in this list`, the refresh test, and the UI test `uncheckAllAsksFirstThenTheMenuOffersCheckAll`. The UI test covers Cancel keeping the tick, Confirm unticking, the entry flipping to "Check all", and Check all ticking.
+
+---
+
 ## 4. Persisted data (Room v4)
 
 `M/data/model/*.kt`, `M/data/room/**`
@@ -121,6 +151,7 @@ Each card shows the name, a shared icon, "x of y ticked", and a progress bar. Al
 List:  (absent) ─create─► Local ─share─► Shared(remoteId) ─leave─► (absent here; it stays for the others)
        Local ─delete─► (absent)  ⇒ cascade-deletes its tasks
 Task:  (absent) ─create─► Unchecked ⇄ Checked ─delete─► (absent) ─undo─► restored with the same id and position
+       any ─edit text─► same state, new message    all items ─Check all / Uncheck all (confirmed)─► all Checked / all Unchecked
 ```
 
 Columns added in v4: `position` (both tables) and `remote_id` (both tables).
@@ -159,10 +190,11 @@ Nothing in the app retries a write automatically. Firestore queues writes to sha
 |---|---|---|
 | Create list / task | one write per submit | the text is put back in the field |
 | Rename | the same value written twice is harmless | the dialog opens with the current name |
+| Edit item text | yes: unchanged text writes nothing, and the same text twice is harmless | press and hold again |
 | Delete task | yes, and Undo restores the same id and position | swipe again |
 | Delete / leave list | yes | swipe again |
 | Check / uncheck | last write wins | tap again |
-| Uncheck all / delete all | yes | menu again |
+| Uncheck all / check all / delete all | yes: each sets the same value on every item | menu again |
 | Reorder | yes: it writes the full order | drag again |
 | Join | yes: `arrayUnion` | the dialog again |
 
@@ -210,7 +242,8 @@ Tests:
 ## 7. Errors (implicit)
 
 `handleError` sets `errorMessage`, and a long snackbar shows it. Every error now has a specific message:
-* empty name or task
+* empty name or item
+* item too long (over 1000 characters, the shared-list limit)
 * invalid join code
 * join failed
 * share failed
@@ -329,9 +362,9 @@ Tests:
 | The original ADHD List palette: yellow (#FDD835) top bar, + buttons and checkboxes with near-black content (≈13:1 contrast), neutral grey surfaces; progress bars use a deeper gold in light mode, where plain yellow on grey is hard to see; no wallpaper-based colors | familiar to existing users; the app looks the same every time |
 | Larger text and line height | easier to scan |
 | A progress bar and "x of y ticked" on every list and at the top of each list; "All ticked. Nice work." | visible progress gives motivation without noise |
-| The whole task row toggles the checkbox; 48 dp handles; a 56 dp + button; keyboard Done adds | big, forgiving tap targets |
-| Confirm before deleting or leaving a list; Undo after deleting a task; "Delete all tasks" asks first | mistakes can be undone and nothing destructive happens by surprise |
-| Text-labelled overflow menu ("Uncheck all", "Delete everything") instead of unlabeled icons | clear meaning, no guessing |
+| The whole item row toggles the checkbox; press and hold edits (with a short vibration); 48 dp handles; a 56 dp + button. Items can span several lines, so Enter adds a new line and + adds the item; keyboard Done adds list names | big, forgiving tap targets; one gesture per meaning (tap ticks, hold edits) |
+| Confirm before deleting or leaving a list; Undo after deleting an item; "Delete everything" asks first; swipe-to-delete only fires past 60% of the row | mistakes can be undone and nothing destructive happens by surprise |
+| Text-labelled overflow menu instead of unlabeled icons. One entry flips between "Uncheck all" (shown while anything is ticked; asks first, because it throws away progress) and "Check all" (shown once nothing is ticked). "Delete everything" also asks first | clear meaning, no guessing; nothing that loses progress happens on one tap |
 | On-screen words say "item" / "something", never "task" | it is a list for anything (shopping, packing, things to remember), not only to-dos. Code still calls rows `Task` |
 | Short fades instead of 500 ms slides | movement that is easy to follow |
 | Long snackbars | enough time to read and react |
@@ -340,13 +373,14 @@ Tests:
 
 ## Tests
 
-* **JVM**, `./gradlew :app:testDebugUnitTest`: 28 tests. `TasksViewModelTest` (13), `ListsViewModelTest` (7), `MirrorPlanTest` (3), `NavigationRepositoryTest` (3), `ExampleUnitTest` (2).
-* **Instrumented**, `./gradlew :app:connectedDebugAndroidTest`: 17 tests.
-  * `StateMachineRegressionTest` (10), `SharedListSyncTest` (3), `MigrationTest`, the existing `DeleteListTest` and `DeleteTaskTest`, plus the template `ExampleInstrumentedTest`.
+* **JVM**, `./gradlew :app:testDebugUnitTest`: 29 tests. `TasksViewModelTest` (14), `ListsViewModelTest` (7), `MirrorPlanTest` (3), `NavigationRepositoryTest` (3), `ExampleUnitTest` (2).
+* **Instrumented**, `./gradlew :app:connectedDebugAndroidTest`: 18 tests.
+  * `StateMachineRegressionTest` (11), `SharedListSyncTest` (3), `MigrationTest`, the existing `DeleteListTest` and `DeleteTaskTest`, plus the template `ExampleInstrumentedTest`.
   * Run them on an emulator only (`ANDROID_SERIAL=emulator-5554`). They clear the app's data and uninstall it on **every** connected device, including a plugged-in phone.
   * `SharedListSyncTest` runs only with `-PfirebaseEmulatorHost=10.0.2.2` and `npm run emulators`; otherwise it is skipped.
   * The test APK excludes Espresso's old `protobuf-lite`, which otherwise shadows Firestore's protobuf and crashes the run.
 * **Security rules**, `cd firebase && npm test`: 9 tests.
 * **Harness flake (fixed):** `BaseUiTest` cleared the DB after the activity had started, so a test could tap the previous test's stale row. Now a rule ordered before the activity rule clears it first.
 * **Emulator isolation:** with `firebaseEmulatorHost` set, the app uses a separate named Firebase app for the `demo-adhdlist` project, even when `google-services.json` is present. Test data can't reach the real project.
-* **Not covered:** a real Firebase project and real devices (everything ran against the local emulator), rotation, TalkBack, and accessible reordering. The drag handle has a content description but no accessibility actions, so screen-reader users can't reorder yet.
+* **Real Firebase:** the automated sync tests run only against the local emulator. Sharing on the real `adhdlist` project was checked by hand: a phone and an emulator shared "Ćwiczenia".
+* **Not covered:** rotation, TalkBack, and accessible reordering. The drag handle has a content description but no accessibility actions, so screen-reader users can't reorder yet.

@@ -204,15 +204,29 @@ class StateMachineRegressionTest : BaseUiTest() {
     }
 
     @Test
-    fun uncheckAllFromTheMenuUnchecksThroughTheRoomSubscription() {
+    fun uncheckAllAsksFirstThenTheMenuOffersCheckAll() {
         openNewList("Groceries")
         addTask("milk")
-
         composeTestRule.onNodeWithTag("TaskCheckBox").performClick()
         composeTestRule.waitUntil(5_000) { isChecked() }
+
+        // Uncheck all asks first; Cancel keeps the tick.
         composeTestRule.onNodeWithContentDescription("More options").performClick()
         composeTestRule.onNodeWithText("Uncheck all").performClick()
+        composeTestRule.onNodeWithText("Cancel").performClick()
+        assertTrue(isChecked())
+
+        // Confirmed: unticked, through the Room subscription.
+        composeTestRule.onNodeWithContentDescription("More options").performClick()
+        composeTestRule.onNodeWithText("Uncheck all").performClick()
+        composeTestRule.onNodeWithText("Uncheck all").performClick() // the dialog's confirm button
         composeTestRule.waitUntil(5_000) { !isChecked() }
+
+        // Nothing ticked now, so the same menu entry has become "Check all", without a dialog.
+        composeTestRule.onNodeWithContentDescription("More options").performClick()
+        composeTestRule.onNodeWithText("Uncheck all").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Check all").performClick()
+        composeTestRule.waitUntil(5_000) { isChecked() }
     }
 
     private fun isChecked() = composeTestRule.onNodeWithTag("TaskCheckBox")

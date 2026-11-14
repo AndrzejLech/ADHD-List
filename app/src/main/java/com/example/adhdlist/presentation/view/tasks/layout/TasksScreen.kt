@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.MoreVert
@@ -89,6 +90,7 @@ fun TasksScreen(
     var renaming by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Task?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
+    var confirmUncheck by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
 
     viewModel.list = list
@@ -143,14 +145,27 @@ fun TasksScreen(
                             Icon(Icons.Outlined.MoreVert, contentDescription = "More options")
                         }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Uncheck all") },
-                                leadingIcon = { Icon(Icons.Outlined.RemoveDone, contentDescription = null) },
-                                onClick = {
-                                    menuOpen = false
-                                    viewModel.triggerCommand(Command.RefreshTasks)
-                                }
-                            )
+                            // One entry that flips: "Uncheck all" while anything is ticked (asks first,
+                            // it throws away progress), "Check all" once nothing is.
+                            if (feedList.any { it.state }) {
+                                DropdownMenuItem(
+                                    text = { Text("Uncheck all") },
+                                    leadingIcon = { Icon(Icons.Outlined.RemoveDone, contentDescription = null) },
+                                    onClick = {
+                                        menuOpen = false
+                                        confirmUncheck = true
+                                    }
+                                )
+                            } else if (feedList.isNotEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("Check all") },
+                                    leadingIcon = { Icon(Icons.Outlined.DoneAll, contentDescription = null) },
+                                    onClick = {
+                                        menuOpen = false
+                                        viewModel.triggerCommand(Command.CheckAll)
+                                    }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Delete everything") },
                                 leadingIcon = { Icon(Icons.Outlined.DeleteSweep, contentDescription = null) },
@@ -266,6 +281,21 @@ fun TasksScreen(
             },
             onDismiss = { editing = null },
             multiLine = true
+        )
+    }
+    if (confirmUncheck) {
+        ConfirmDialog(
+            title = "Uncheck everything?",
+            text = feedList.count { it.state }.let { n ->
+                if (n == 1) "This unticks the ticked item in “${current.name}”."
+                else "This unticks all $n ticked items in “${current.name}”."
+            },
+            confirmLabel = "Uncheck all",
+            onConfirm = {
+                viewModel.triggerCommand(Command.RefreshTasks)
+                confirmUncheck = false
+            },
+            onDismiss = { confirmUncheck = false }
         )
     }
     if (confirmClear) {

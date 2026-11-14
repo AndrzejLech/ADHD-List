@@ -17,6 +17,7 @@ import com.example.adhdlist.data.room.task.TaskRepository
 import com.example.adhdlist.domain.database.lists.GetListUseCase
 import com.example.adhdlist.domain.database.lists.ShareListUseCase
 import com.example.adhdlist.domain.database.lists.UpdateListUseCase
+import com.example.adhdlist.domain.database.tasks.CheckAllTasksUseCase
 import com.example.adhdlist.domain.database.tasks.ClearTasksUseCase
 import com.example.adhdlist.domain.database.tasks.CreateTaskUseCase
 import com.example.adhdlist.domain.database.tasks.DeleteTaskUseCase
@@ -119,6 +120,8 @@ class TasksViewModel @Inject constructor(
                 Command.SaveOrder -> _actions.send(Action.SaveOrder)
                 Command.Share -> _actions.send(Action.Share)
 
+                Command.CheckAll -> _actions.send(Action.CheckAll)
+
                 Command.RefreshTasks -> {
                     Logger.d(TAG, "Command", "RefreshingTasks")
                     _actions.send(Action.RefreshTasks)
@@ -149,6 +152,7 @@ class TasksViewModel @Inject constructor(
                 is Action.EditItem -> report(EditTaskUseCase(taskRepository).execute(action.task))
                 is Action.RenameList -> renameList(action.name)
                 Action.RefreshTasks -> report(RefreshTasksUseCase(taskRepository).execute(list.id))
+                Action.CheckAll -> report(CheckAllTasksUseCase(taskRepository).execute(list.id))
                 Action.SaveOrder -> report(ReorderTasksUseCase(taskRepository).execute(list.id, _feedList.value.toList()))
                 Action.Share -> share()
             }
@@ -279,6 +283,7 @@ class TasksViewModel @Inject constructor(
         object ClearList : BaseCommand()
         object NavigateBack : BaseCommand()
         object RefreshTasks : BaseCommand()
+        object CheckAll : BaseCommand()
         object SaveOrder : BaseCommand()
         object Share : BaseCommand()
         data class RenameList(val name: String) : BaseCommand()
@@ -293,6 +298,7 @@ class TasksViewModel @Inject constructor(
         object ClearTasks : BaseAction()
         object NavigateBack : BaseAction()
         object RefreshTasks : BaseAction()
+        object CheckAll : BaseAction()
         object SaveOrder : BaseAction()
         object Share : BaseAction()
         data class RenameList(val name: String) : BaseAction()
