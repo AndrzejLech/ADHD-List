@@ -171,15 +171,17 @@ One level only: a list holds items without a category, shown at the top, and cat
 | Event | Effect |
 |---|---|
 | ⋮ → New category | name dialog; blank is refused |
-| Press and hold a header | dialog: rename, or **Delete**, which asks "Delete “Warzywa”? Its 3 items stay and move to the top of the list." |
-| Press and hold an item | edit dialog with category chips ("No category", Warzywa, …) to move it |
+| Press and hold a header | dialog: rename, or **Delete** |
+| Swipe a header past 60% | springs back and asks, like a list card |
+| Delete (from either) | asks "Delete “Warzywa”? This also deletes its 3 items. It can't be undone." |
+| Press and hold an item | edit dialog with category chips ("No category", Warzywa, …) to move it, and **Delete** (with Undo, like a swipe) |
 | Drag an item onto another item | it takes that item's place and **its category** (top ⇄ category, or between categories) |
 | Drag an item down past a header | it becomes that category's first item; a closed category opens at once so the item stays visible |
 | Drag an item up past its own header | it moves to the end of the section above: the previous category, or the top of the list |
 | Delete everything | removes the list's items *and* its categories |
 
 Invariants:
-* **C-INV1:** deleting a category never deletes items. `CategoryDao.releaseItems` sets their `category_id` to null in the same transaction (or the same Firestore batch for a shared list).
+* **C-INV1:** deleting a category deletes its items in the same transaction (`CategoryDao.deleteItems`), or the same Firestore batch for a shared list. It always asks first and the dialog names how many items go. `releaseItems` is only used by the sync, for a category that vanished remotely while its items still exist (C-INV2).
 * **C-INV2:** an item whose category doesn't exist (yet) shows at the top, never disappears. Both the screen and the sync treat an unknown `category_id` as "no category".
 * **C-INV3:** for a shared list, an item is never mirrored before its category. Categories and items are mirrored together from one `combine` of the two listeners, in one transaction (`listContent` in `SharedListsSync.kt`).
 * **C-INV4:** items never wait on categories that can't be read. If the categories listener fails (for example security rules published before categories existed), `listContent` reports the categories as unknown (`null`). The items keep syncing, and the local categories are left exactly as they are until categories can be read again.
@@ -188,11 +190,14 @@ Invariants:
 * **C1: moving an item into a category could crash the list.**
   * Cause: the rows were built in two places. Items at the top came from the screen's redraw; category rows came from inside `LazyColumn`'s builder, which runs later and could see newer data. A just-moved item then appeared twice, at the top and in its category, and the list threw "Key was already used" (sometimes reported as "layout state is not idle").
   * Fix: all rows are built once from one read of the items and categories, then handed to the list (`ListRow` in `TasksScreen.kt`).
-  * Test: `categoriesGroupItemsFoldAndKeepTheirItemsWhenDeleted`, which crashed before the fix and passed 3 out of 3 runs alone and in full-suite runs after it.
+  * Test: `categoriesFoldAndAreDeletedWithTheirItems`, which crashed before the fix and passed 3 out of 3 runs alone and in full-suite runs after it.
 * **C3: with the old security rules, items in shared lists stopped syncing as well.**
   * Found from a real-device log: the categories listener was refused (`PERMISSION_DENIED`), and because the sync waited for both categories and items, items never synced either.
   * Fix: C-INV4.
   * Test: `ListContentTest`.
+* **C4: items couldn't be dragged out of a category** (reported by you, then reproduced by `draggingMovesItemsIntoAndOutOfCategories`).
+  * Cause: headers were `ReorderableItem(enabled = false)`, and the drag library never treats a disabled row as a drop target. Dragging past a header therefore never ran the "move into this section" step. Down into a category only seemed to work because the next item carried the category.
+  * Fix: headers are enabled targets. They have no drag handle, so they still can't be dragged themselves.
 * **C2: one swipe could delete an item twice.** Material may confirm the same finished swipe twice, which sent two delete commands and two Undo snackbars. `TaskRow` now acts on the first only.
 
 Tests:
@@ -206,7 +211,7 @@ Tests:
   * the save carries the new category
   * name validation
 * `MirrorPlanTest`: categories keep this phone's open/closed state; an item's category is mapped through the remote id and falls back to none.
-* UI `categoriesGroupItemsFoldAndKeepTheirItemsWhenDeleted`, `draggingMovesItemsIntoAndOutOfCategories`.
+* UI `categoriesFoldAndAreDeletedWithTheirItems`, `draggingMovesItemsIntoAndOutOfCategories`.
 * Sync `categoriesTravelWithTheListAndBothWays`.
 
 ---
@@ -293,7 +298,8 @@ Tests: the ViewModel subscription and refresh tests.
 | Row | Released past the threshold | Afterwards |
 |---|---|---|
 | List card | the card springs back and the confirm dialog opens | nothing is deleted until the user confirms |
-| Task row | dismissed, task deleted | an "Undo" snackbar shows for the long duration; Undo re-inserts the task with the same id and position |
+| Task row | dismissed, task deleted | an "Undo" snackbar shows for the long duration; Undo re-inserts the task with the same id and position. The item's popup has the same Delete, through the same code |
+| Category header | the header springs back and the delete dialog opens | nothing is deleted until the user confirms; then the category and its items go |
 
 "Past the threshold" means **60% of the row's width** (`rememberDeliberateSwipeState` in `CommonUi.kt`).
 * Material's default is a fixed 56 dp, which an accidental brush reaches.
@@ -305,7 +311,7 @@ Test: `aShortOrQuickSwipeDoesNotDelete`.
 The undo snackbar runs in the **screen's** coroutine scope. A row's own scope ends when the row is removed, which would cancel the snackbar.
 
 Tests:
-* UI: `swipingAListAsksBeforeDeleting`, `deletedTaskComesBackWithUndo`.
+* UI: `swipingAListAsksBeforeDeleting`, `deletedItemComesBackWithUndoFromSwipeOrPopup`, and the header swipe and popup delete in `categoriesFoldAndAreDeletedWithTheirItems`.
 * The existing `DeleteListTest` now confirms the dialog.
 
 ---

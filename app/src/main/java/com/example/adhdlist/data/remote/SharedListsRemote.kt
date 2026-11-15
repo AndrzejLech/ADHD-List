@@ -155,10 +155,10 @@ class SharedListsRemote(context: Context) {
         categoriesRef(listId).document(category.id).set(category.toMap()).logFailure("setCategory")
     }
 
-    /** Deletes the category; its items move to "no category" in the same batch, so none are lost. */
+    /** Deletes the category and its items in one batch. */
     fun deleteCategory(listId: String, categoryId: String, itemIds: List<String>) = batch("deleteCategory") { batch ->
         batch.delete(categoriesRef(listId).document(categoryId))
-        itemIds.forEach { batch.update(tasksRef(listId).document(it), CATEGORY, FieldValue.delete()) }
+        itemIds.forEach { batch.delete(tasksRef(listId).document(it)) }
     }
 
     fun setState(listId: String, taskId: String, state: Boolean) {

@@ -17,6 +17,8 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.adhdlist.BaseUiTest
 import com.example.adhdlist.BuildConfig
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.FirebaseAuth
 import com.example.adhdlist.data.model.Category
 import com.example.adhdlist.data.model.Task
 import com.example.adhdlist.data.model.TaskList
@@ -54,6 +56,9 @@ class SharedListSyncTest : BaseUiTest() {
     fun startSync() {
         assumeTrue("Firebase emulator not configured", host.isNotEmpty())
         http("DELETE", "http://$host:8080/emulator/v1/$project")
+        // A test account left in the app's storage by an earlier run is unknown to a fresh auth
+        // emulator (INVALID_REFRESH_TOKEN), so start every test signed out.
+        FirebaseAuth.getInstance(FirebaseApp.getInstance("local-emulator")).signOut()
         // HiltTestApplication doesn't run AdhdListApplication.onCreate, so start the sync here.
         sync.start(MainScope())
     }

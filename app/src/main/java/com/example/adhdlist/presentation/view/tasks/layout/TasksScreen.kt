@@ -91,6 +91,21 @@ fun TasksScreen(
     val haptic = LocalHapticFeedback.current
     // Screen-level scope: a row's own scope dies with the row, which would cancel its undo snackbar.
     val scope = rememberCoroutineScope()
+    // Swipe and the item's popup both delete through here, so both offer Undo.
+    val onDelete: (Task) -> Unit = { task ->
+        viewModel.triggerCommand(Command.SwipeTaskDelete(task))
+        scope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            val result = snackbarHostState.showSnackbar(
+                "Deleted “${task.message}”",
+                actionLabel = "Undo",
+                duration = SnackbarDuration.Long
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                viewModel.triggerCommand(Command.RestoreTask(task))
+            }
+        }
+    }
     var renaming by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Task?>(null) }
     var editingCategory by remember { mutableStateOf<Category?>(null) }
@@ -265,20 +280,6 @@ fun TasksScreen(
                 // Position among the items shown, for the "TaskListElement$n" test tags.
                 val rowIndex = rows.filterIsInstance<ListRow.Item>().withIndex().associate { (i, row) -> row.task.id to i }
 
-                val onDelete: (Task) -> Unit = { task ->
-                    viewModel.triggerCommand(Command.SwipeTaskDelete(task))
-                    scope.launch {
-                        snackbarHostState.currentSnackbarData?.dismiss()
-                        val result = snackbarHostState.showSnackbar(
-                            "Deleted “${task.message}”",
-                            actionLabel = "Undo",
-                            duration = SnackbarDuration.Long
-                        )
-                        if (result == SnackbarResult.ActionPerformed) {
-                            viewModel.triggerCommand(Command.RestoreTask(task))
-                        }
-                    }
-                }
                 val onDragStarted = { haptic.performHapticFeedback(HapticFeedbackType.LongPress) }
                 val onDragStopped = { viewModel.triggerCommand(Command.SaveOrder) }
 
@@ -296,7 +297,9 @@ fun TasksScreen(
                                 reorderState, rowIndex[row.task.id] ?: 0, row.task, viewModel,
                                 { editing = it }, onDelete, onDragStarted, onDragStopped
                             )
-                            is ListRow.Header -> ReorderableItem(reorderState, key = row.key, enabled = false) {
+                            // Enabled so a dragged item can be dropped on it (a disabled row is never a drop target);
+                            // it has no drag handle, so the header itself can't be dragged.
+                            is ListRow.Header -> ReorderableItem(reorderState, key = row.key) {
                                 CategoryHeader(
                                     category = row.category,
                                     ticked = row.ticked,
@@ -304,7 +307,8 @@ fun TasksScreen(
                                     isAddTarget = viewModel.addTargetId.value == row.category.id,
                                     onToggle = { viewModel.triggerCommand(Command.ToggleCategory(row.category)) },
                                     onAddHere = { viewModel.triggerCommand(Command.AddTo(row.category)) },
-                                    onEdit = { editingCategory = row.category }
+                                    onEdit = { editingCategory = row.category },
+                                    onDeleteRequest = { deletingCategory = row.category }
                                 )
                             }
                         }
@@ -342,6 +346,10 @@ fun TasksScreen(
             multiLine = true,
             extraContent = if (categories.isEmpty()) null else {
                 { CategoryChooser(categories, categoryId) { categoryId = it } }
+            },
+            extraAction = "Delete" to {
+                editing = null
+                onDelete(task)
             }
         )
     }
@@ -381,10 +389,10 @@ fun TasksScreen(
             title = "Delete “${category.name}”?",
             text = when (count) {
                 0 -> "The category is empty."
-                1 -> "Its item stays and moves to the top of the list."
-                else -> "Its $count items stay and move to the top of the list."
+                1 -> "This also deletes its 1 item. It can't be undone."
+                else -> "This also deletes its $count items. It can't be undone."
             },
-            confirmLabel = "Delete category",
+            confirmLabel = "Delete",
             onConfirm = {
                 viewModel.triggerCommand(Command.DeleteCategory(category))
                 deletingCategory = null

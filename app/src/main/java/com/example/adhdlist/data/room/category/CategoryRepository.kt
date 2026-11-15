@@ -55,13 +55,13 @@ class CategoryRepository(context: Context, private val remote: SharedListsRemote
         }
     }
 
-    /** The category goes; its items stay and move to the top of the list. */
+    /** The category and its items go together (the screen asks first). */
     suspend fun deleteCategory(category: Category): Result<Boolean, Exception> {
         return try {
             val listRemoteId = remoteListId(category.listId)
             val categoryRemoteId = category.remoteId
             if (listRemoteId == null || categoryRemoteId == null) taskDatabase.withTransaction {
-                categoryDao.releaseItems(category.id)
+                categoryDao.deleteItems(category.id)
                 categoryDao.delete(category)
             } else remote.deleteCategory(
                 listRemoteId,

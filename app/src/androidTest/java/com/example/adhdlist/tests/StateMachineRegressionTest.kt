@@ -108,7 +108,7 @@ class StateMachineRegressionTest : BaseUiTest() {
     }
 
     @Test
-    fun deletedTaskComesBackWithUndo() {
+    fun deletedItemComesBackWithUndoFromSwipeOrPopup() {
         openNewList("Groceries")
         addTask("milk")
         addTask("eggs")
@@ -116,7 +116,13 @@ class StateMachineRegressionTest : BaseUiTest() {
         composeTestRule.onNodeWithTag("TaskListElement0").performTouchInput { swipeRight() }
         composeTestRule.waitUntil(5_000) { taskTexts() == listOf("eggs") }
         composeTestRule.onNodeWithText("Undo").performClick()
+        composeTestRule.waitUntil(5_000) { taskTexts() == listOf("milk", "eggs") }
 
+        // The same from the item's popup: Delete, then Undo.
+        composeTestRule.onNodeWithTag("TaskListElement1").performTouchInput { longClick() }
+        inDialog("Delete").performClick()
+        composeTestRule.waitUntil(5_000) { taskTexts() == listOf("milk") }
+        composeTestRule.onNodeWithText("Undo").performClick()
         composeTestRule.waitUntil(5_000) { taskTexts() == listOf("milk", "eggs") }
     }
 
@@ -198,7 +204,7 @@ class StateMachineRegressionTest : BaseUiTest() {
         composeTestRule.onAllNodesWithText(text).filterToOne(hasAnyAncestor(isDialog()))
 
     @Test
-    fun categoriesGroupItemsFoldAndKeepTheirItemsWhenDeleted() {
+    fun categoriesFoldAndAreDeletedWithTheirItems() {
         openNewList("Zakupy")
         addTask("chleb")
 
@@ -236,11 +242,17 @@ class StateMachineRegressionTest : BaseUiTest() {
         composeTestRule.onNodeWithText("Warzywa").performClick()
         composeTestRule.waitUntil(5_000) { taskTexts().isEmpty() }
 
-        // Deleting the category keeps its items: they move to the top.
+        // Swiping the header only asks; Cancel keeps everything.
+        composeTestRule.onNodeWithTag("CategoryHeader").performTouchInput { swipeRight() }
+        inDialog("Cancel").performClick()
+        composeTestRule.onNodeWithText("Warzywa").assertExists()
+
+        // Deleting from its popup removes the category and its items (both are inside it now).
         composeTestRule.onNodeWithTag("CategoryHeader").performTouchInput { longClick() }
         inDialog("Delete").performClick()
-        composeTestRule.onNodeWithText("Delete category").performClick()
-        composeTestRule.waitUntil(5_000) { taskTexts().sorted() == listOf("chleb", "cukinia") }
+        composeTestRule.onNodeWithText("This also deletes its 2 items. It can't be undone.").assertExists()
+        inDialog("Delete").performClick()
+        composeTestRule.waitUntil(5_000) { textShown("Nothing here yet") }
         composeTestRule.onNodeWithText("Warzywa").assertDoesNotExist()
     }
 
@@ -290,7 +302,8 @@ class StateMachineRegressionTest : BaseUiTest() {
         composeTestRule.waitUntil(5_000) { textShown("Warzywa") }
         assertEquals(emptyList<String>(), taskTexts())
         composeTestRule.onNodeWithText("Warzywa").performClick()
-        composeTestRule.waitUntil(5_000) { taskTexts() == listOf("chleb", "cukinia") }
+        // The 400 px drag can also carry "chleb" past "cukinia", so either order is right.
+        composeTestRule.waitUntil(5_000) { taskTexts().sorted() == listOf("chleb", "cukinia") }
 
         // Up past its header: back to the top of the list.
         dragHandle("chleb", byY = -400f)

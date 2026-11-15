@@ -14,7 +14,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -32,10 +34,12 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.adhdlist.data.model.Category
+import com.example.adhdlist.presentation.common.SwipeDeleteBackground
+import com.example.adhdlist.presentation.common.rememberDeliberateSwipeState
 import com.example.adhdlist.presentation.view.lists.layout.progressText
 
 /** Tap opens or closes the category; press and hold edits it; + makes it where new items go. */
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun CategoryHeader(
     category: Category,
@@ -45,13 +49,24 @@ fun CategoryHeader(
     onToggle: () -> Unit,
     onAddHere: () -> Unit,
     onEdit: () -> Unit,
+    onDeleteRequest: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
+    // Swiping only asks, like a list card: the header springs back and the delete dialog opens.
+    val dismissState = rememberDeliberateSwipeState {
+        onDeleteRequest()
+        false
+    }
+    SwipeToDismissBox(
+        state = dismissState,
+        modifier = Modifier.padding(top = 8.dp),
+        backgroundContent = { SwipeDeleteBackground(dismissState) }
+    ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 8.dp)
             .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.background)
             // The category new items go into is marked, so it's clear where + in the field adds.
             .background(if (isAddTarget) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f) else Color.Transparent)
             .combinedClickable(
@@ -93,6 +108,7 @@ fun CategoryHeader(
         IconButton(onClick = onAddHere) {
             Icon(Icons.Outlined.Add, contentDescription = "Add to ${category.name}")
         }
+    }
     }
 }
 

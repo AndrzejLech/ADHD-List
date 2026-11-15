@@ -40,7 +40,10 @@ interface CategoryDao {
     @Query("UPDATE category_table SET expanded = :expanded WHERE category_id = :category_id")
     suspend fun setExpanded(category_id: Int, expanded: Boolean)
 
-    // Items of a deleted category move to the top of the list instead of disappearing.
+    // For a category that vanished remotely while its items still exist: they show at the top.
     @Query("UPDATE task_table SET category_id = NULL WHERE category_id = :category_id")
     suspend fun releaseItems(category_id: Int)
+
+    @Query("DELETE FROM task_table WHERE category_id = :category_id")
+    suspend fun deleteItems(category_id: Int)
 }
