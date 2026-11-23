@@ -29,6 +29,7 @@ forgiving actions, so getting things out of your head takes as little effort as 
 - Items: swipe, or press and hold → **Delete**. Both offer **Undo**.
 - Categories: swipe the header, or press and hold → **Delete**. It asks first and also deletes the category's items.
 - Lists: swipe, which asks first. A shared list is left, not deleted, so it stays for the others.
+- **Delete checked** (⋮ menu) removes only the ticked items; it asks first and is greyed out while nothing is ticked.
 - **Delete everything** (⋮ menu) asks first and is greyed out on an empty list.
 
 **Shared lists**

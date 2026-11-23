@@ -138,6 +138,19 @@ class TaskRepository(context: Context, private val remote: SharedListsRemote) {
         }
     }
 
+    /** Deletes the ticked items; categories stay. */
+    suspend fun deleteCheckedTasks(listId: Int): Result<Boolean, Exception> {
+        return try {
+            val checked = taskDao.getTasksOnce(listId).filter { it.state }
+            val listRemoteId = remoteListId(listId)
+            if (listRemoteId == null) taskDao.delete(checked)
+            else remote.deleteAll(listRemoteId, checked.mapNotNull { it.remoteId }, emptyList())
+            Result.Success(true)
+        } catch (e: Exception) {
+            Result.Error(e)
+        }
+    }
+
     suspend fun clearAllTasksFromList(listId: Int): Result<Boolean, Exception> {
         return try {
             val listRemoteId = remoteListId(listId)

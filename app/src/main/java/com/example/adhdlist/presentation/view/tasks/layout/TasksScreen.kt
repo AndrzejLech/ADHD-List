@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.Edit
@@ -114,6 +115,7 @@ fun TasksScreen(
     val categories by viewModel.categories.collectAsState()
     var confirmClear by remember { mutableStateOf(false) }
     var confirmUncheck by remember { mutableStateOf(false) }
+    var confirmDeleteChecked by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
 
     viewModel.list = list
@@ -198,6 +200,15 @@ fun TasksScreen(
                                 )
                             }
                             // Greyed out rather than hidden, so the menu looks the same every time.
+                            DropdownMenuItem(
+                                enabled = feedList.any { it.state },
+                                text = { Text("Delete checked") },
+                                leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    confirmDeleteChecked = true
+                                }
+                            )
                             DropdownMenuItem(
                                 enabled = feedList.isNotEmpty() || categories.isNotEmpty(),
                                 text = { Text("Delete everything") },
@@ -413,6 +424,21 @@ fun TasksScreen(
                 confirmUncheck = false
             },
             onDismiss = { confirmUncheck = false }
+        )
+    }
+    if (confirmDeleteChecked) {
+        ConfirmDialog(
+            title = "Delete checked items?",
+            text = feedList.count { it.state }.let { n ->
+                if (n == 1) "This removes the ticked item from “${current.name}”. It can't be undone."
+                else "This removes all $n ticked items from “${current.name}”. It can't be undone."
+            },
+            confirmLabel = "Delete",
+            onConfirm = {
+                viewModel.triggerCommand(Command.DeleteChecked)
+                confirmDeleteChecked = false
+            },
+            onDismiss = { confirmDeleteChecked = false }
         )
     }
     if (confirmClear) {

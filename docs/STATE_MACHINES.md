@@ -135,7 +135,7 @@ The first ⋮ entry is a small state machine driven by the items on screen:
 | NoneTicked | items exist, none ticked | **Check all** | ticks every item at once, without a dialog → SomeTicked |
 | Empty | no items | neither entry | — |
 
-The other entries are **New category** (§3c) and **Delete everything**, which asks first. It is greyed out (not hidden, so the menu keeps its layout) while the list has no items and no categories. Test: `deleteEverythingIsOnlyAvailableWhenThereIsSomethingToDelete`.
+The other entries are **New category** (§3c), **Delete checked** and **Delete everything**. Both deletes ask first. **Delete checked** removes only the ticked items (categories stay) and is greyed out while nothing is ticked. **Delete everything** is greyed out (not hidden, so the menu keeps its layout) while the list has no items and no categories. Test: `deleteEverythingIsOnlyAvailableWhenThereIsSomethingToDelete`.
 
 * **Invariant:** progress (ticks) is never lost on a single tap. Unticking everything always goes through a dialog.
 * Both entries write one value to every item: `TaskRepository.setAllTasks(listId, checked)`, a single `UPDATE` in Room or one Firestore batch for a shared list. Repeating either is harmless.

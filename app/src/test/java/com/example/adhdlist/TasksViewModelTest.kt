@@ -190,6 +190,16 @@ class TasksViewModelTest {
         coVerify(exactly = 1) { taskRepository.setAllTasks(1, true) }
     }
 
+    @Test
+    fun `delete checked removes the ticked items of this list`() = runTest(dispatcher) {
+        collectActions()
+        coEvery { taskRepository.deleteCheckedTasks(1) } returns Result.Success(true)
+        vm.triggerCommand(Command.DeleteChecked)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { taskRepository.deleteCheckedTasks(1) }
+    }
+
     private val vegetables = Category(1, "Warzywa", id = 5, expanded = false)
 
     @Test

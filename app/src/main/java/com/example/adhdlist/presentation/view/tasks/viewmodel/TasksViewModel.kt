@@ -27,6 +27,7 @@ import com.example.adhdlist.domain.database.lists.UpdateListUseCase
 import com.example.adhdlist.domain.database.tasks.CheckAllTasksUseCase
 import com.example.adhdlist.domain.database.tasks.ClearTasksUseCase
 import com.example.adhdlist.domain.database.tasks.CreateTaskUseCase
+import com.example.adhdlist.domain.database.tasks.DeleteCheckedTasksUseCase
 import com.example.adhdlist.domain.database.tasks.DeleteTaskUseCase
 import com.example.adhdlist.domain.database.tasks.EditTaskUseCase
 import com.example.adhdlist.domain.database.tasks.GetTasksUseCase
@@ -157,6 +158,7 @@ class TasksViewModel @Inject constructor(
                 Command.Share -> _actions.send(Action.Share)
 
                 Command.CheckAll -> _actions.send(Action.CheckAll)
+                Command.DeleteChecked -> _actions.send(Action.DeleteChecked)
 
                 Command.RefreshTasks -> {
                     Logger.d(TAG, "Command", "RefreshingTasks")
@@ -198,6 +200,7 @@ class TasksViewModel @Inject constructor(
                 is Action.RenameList -> renameList(action.name)
                 Action.RefreshTasks -> report(RefreshTasksUseCase(taskRepository).execute(list.id))
                 Action.CheckAll -> report(CheckAllTasksUseCase(taskRepository).execute(list.id))
+                Action.DeleteChecked -> report(DeleteCheckedTasksUseCase(taskRepository).execute(list.id))
                 Action.SaveOrder -> report(ReorderTasksUseCase(taskRepository).execute(list.id, _feedList.value.toList()))
                 Action.Share -> share()
             }
@@ -370,6 +373,7 @@ class TasksViewModel @Inject constructor(
         object NavigateBack : BaseCommand()
         object RefreshTasks : BaseCommand()
         object CheckAll : BaseCommand()
+        object DeleteChecked : BaseCommand()
         data class NewCategory(val name: String) : BaseCommand()
         data class RenameCategory(val category: Category, val name: String) : BaseCommand()
         data class DeleteCategory(val category: Category) : BaseCommand()
@@ -390,6 +394,7 @@ class TasksViewModel @Inject constructor(
         object NavigateBack : BaseAction()
         object RefreshTasks : BaseAction()
         object CheckAll : BaseAction()
+        object DeleteChecked : BaseAction()
         data class NewCategory(val name: String) : BaseAction()
         data class RenameCategory(val category: Category) : BaseAction()
         data class DeleteCategory(val category: Category) : BaseAction()
